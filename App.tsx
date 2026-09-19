@@ -1,20 +1,767 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Animated,
+  BackHandler,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+
+import { PressableScale } from './src/components/PressableScale';
+import {
+  createSubscription,
+  deleteSubscription,
+  getSubscriptions,
+  migrateDatabase,
+  setNotificationId,
+  updateSubscription,
+} from './src/database';
+import {
+  cancelReminder,
+  prepareNotifications,
+  scheduleRenewalReminder,
+} from './src/notifications';
+import { categories, categoryMeta, colors, shadows } from './src/theme';
+import type {
+  BillingCycle,
+  CategoryName,
+  ScreenName,
+  Subscription,
+  SubscriptionDraft,
+} from './src/types';
+import {
+  daysUntil,
+  dueLabel,
+  formatMonthDay,
+  formatShortDate,
+  greeting,
+  isValidISODate,
+  monthlyEquivalent,
+  peso,
+  todayISO,
+  totalMonthly,
+} from './src/utils';
+
+const cycleLabels: Record<BillingCycle, string> = {
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+  quarterly: 'Quarterly',
+  yearly: 'Yearly',
+};
+
+const menuItems: {
+  screen: Exclude<ScreenName, 'overview'>;
+  title: string;
+  caption: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  color: string;
+}[] = [
+  { screen: 'subscriptions', title: 'Subscriptions', caption: 'View and manage', icon: 'credit-card-multiple-outline', color: colors.rose },
+  { screen: 'calendar', title: 'Calendar', caption: 'Upcoming charges', icon: 'calendar-month-outline', color: colors.peach },
+  { screen: 'analytics', title: 'Analytics', caption: 'Understand spending', icon: 'chart-donut', color: colors.slate },
+  { screen: 'categories', title: 'Categories', caption: 'See where it goes', icon: 'shape-outline', color: colors.apricot },
+  { screen: 'trials', title: 'Free trials', caption: 'Cancel in time', icon: 'timer-sand', color: '#A9BFA8' },
+  { screen: 'form', title: 'Add new', caption: 'Track a subscription', icon: 'plus-circle-outline', color: '#A9A5C7' },
+];
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
+    <SafeAreaProvider>
+      <SQLiteProvider databaseName="subtrack.db" onInit={migrateDatabase}>
+        <SubTrackApp />
+      </SQLiteProvider>
+    </SafeAreaProvider>
+  );
+}
+
+function SubTrackApp() {
+  const db = useSQLiteContext();
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [screen, setScreen] = useState<ScreenName>('overview');
+  const [editing, setEditing] = useState<Subscription | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [showLaunch, setShowLaunch] = useState(true);
+  const screenOpacity = useRef(new Animated.Value(1)).current;
+  const screenY = useRef(new Animated.Value(0)).current;
+  const launchOpacity = useRef(new Animated.Value(1)).current;
+  const launchScale = useRef(new Animated.Value(0.88)).current;
+
+  const load = async () => {
+    try {
+      setSubscriptions(await getSubscriptions(db));
+    } catch {
+      Alert.alert('Could not load SubTrack', 'Please close and reopen the app.');
+    } finally {
+      setLoaded(true);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    void prepareNotifications().catch(() => undefined);
+    Animated.spring(launchScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 9,
+      bounciness: 9,
+    }).start();
+    const timer = setTimeout(() => {
+      Animated.timing(launchOpacity, {
+        toValue: 0,
+        duration: 420,
+        useNativeDriver: true,
+      }).start(() => setShowLaunch(false));
+    }, 1_050);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    screenOpacity.setValue(0);
+    screenY.setValue(14);
+    Animated.parallel([
+      Animated.timing(screenOpacity, { toValue: 1, duration: 280, useNativeDriver: true }),
+      Animated.spring(screenY, { toValue: 0, useNativeDriver: true, speed: 18, bounciness: 4 }),
+    ]).start();
+  }, [screen]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (screen === 'overview') return false;
+      const destination = screen === 'form' && editing ? 'subscriptions' : 'overview';
+      setEditing(null);
+      setScreen(destination);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [screen, editing]);
+
+  const navigate = (next: ScreenName) => {
+    if (next === 'form') setEditing(null);
+    setScreen(next);
+  };
+
+  const edit = (subscription: Subscription) => {
+    setEditing(subscription);
+    setScreen('form');
+  };
+
+  const save = async (draft: SubscriptionDraft) => {
+    try {
+      let saved: Subscription;
+      if (editing) {
+        await updateSubscription(db, editing.id, draft);
+        await cancelReminder(editing.notificationId);
+        saved = { ...editing, ...draft, notificationId: null };
+      } else {
+        saved = await createSubscription(db, draft);
+      }
+      let notificationId: string | null = null;
+      try {
+        notificationId = await scheduleRenewalReminder(saved);
+      } catch {
+        // Saving the subscription remains successful even if Android blocks alarms.
+      }
+      await setNotificationId(db, saved.id, notificationId);
+      await load();
+      setEditing(null);
+      setScreen('subscriptions');
+      if (draft.notificationsEnabled && !notificationId) {
+        Alert.alert(
+          'Saved without a reminder',
+          'Allow notifications in Android settings, or choose a billing date far enough in the future for the reminder window.',
+        );
+      }
+    } catch {
+      Alert.alert('Could not save subscription', 'Your changes were not saved. Please try again.');
+    }
+  };
+
+  const remove = (subscription: Subscription) => {
+    Alert.alert(
+      `Remove ${subscription.name}?`,
+      'This removes the subscription and its scheduled reminder from this device.',
+      [
+        { text: 'Keep it', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await cancelReminder(subscription.notificationId);
+                await deleteSubscription(db, subscription.id);
+                await load();
+              } catch {
+                Alert.alert('Could not remove subscription', 'Please try again.');
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
+  let currentScreen;
+  switch (screen) {
+    case 'subscriptions':
+      currentScreen = <SubscriptionsScreen items={subscriptions} onBack={() => navigate('overview')} onAdd={() => navigate('form')} onEdit={edit} onDelete={remove} />;
+      break;
+    case 'calendar':
+      currentScreen = <CalendarScreen items={subscriptions} onBack={() => navigate('overview')} />;
+      break;
+    case 'analytics':
+      currentScreen = <AnalyticsScreen items={subscriptions} onBack={() => navigate('overview')} />;
+      break;
+    case 'categories':
+      currentScreen = <CategoriesScreen items={subscriptions} onBack={() => navigate('overview')} />;
+      break;
+    case 'trials':
+      currentScreen = <TrialsScreen items={subscriptions} onBack={() => navigate('overview')} onAdd={() => navigate('form')} onEdit={edit} />;
+      break;
+    case 'form':
+      currentScreen = (
+        <SubscriptionForm
+          initial={editing}
+          onBack={() => {
+            const destination = editing ? 'subscriptions' : 'overview';
+            setEditing(null);
+            navigate(destination);
+          }}
+          onSave={save}
+        />
+      );
+      break;
+    default:
+      currentScreen = <Overview items={subscriptions} loaded={loaded} onNavigate={navigate} />;
+  }
+
+  return (
+    <View style={styles.app}>
+      <StatusBar style="dark" />
+      <View style={[styles.blob, styles.blobTop]} />
+      <View style={[styles.blob, styles.blobBottom]} />
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <Animated.View style={[styles.screen, { opacity: screenOpacity, transform: [{ translateY: screenY }] }]}>
+          {currentScreen}
+        </Animated.View>
+      </SafeAreaView>
+      {showLaunch && (
+        <Animated.View style={[styles.launch, { opacity: launchOpacity }]}>
+          <Animated.View style={[styles.launchInner, { transform: [{ scale: launchScale }] }]}>
+            <LinearGradient colors={[colors.rose, colors.peach]} style={styles.launchIcon}>
+              <MaterialCommunityIcons name="credit-card-clock-outline" size={46} color={colors.white} />
+            </LinearGradient>
+            <Text style={styles.launchTitle}>SubTrack</Text>
+            <Text style={styles.launchCaption}>Keep every renewal in sight.</Text>
+          </Animated.View>
+        </Animated.View>
+      )}
+    </View>
+  );
+}
+
+function Overview({ items, loaded, onNavigate }: { items: Subscription[]; loaded: boolean; onNavigate: (screen: ScreenName) => void }) {
+  const monthly = totalMonthly(items);
+  const next = items.find((item) => daysUntil(item.nextBillingDate) >= 0) ?? items[0];
+  const trialCount = items.filter((item) => item.isTrial).length;
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.overviewContent}>
+      <View style={styles.brandRow}>
+        <View>
+          <Text style={styles.eyebrow}>{greeting()}</Text>
+          <Text style={styles.title}>Your SubTrack</Text>
+        </View>
+        <View style={styles.brandIcon}>
+          <MaterialCommunityIcons name="credit-card-clock-outline" size={25} color={colors.rose} />
+        </View>
+      </View>
+      <LinearGradient colors={[colors.rose, '#D99D9E', colors.peach]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
+        <View style={styles.heroGlow} />
+        <Text style={styles.heroLabel}>ESTIMATED MONTHLY SPEND</Text>
+        <Text style={styles.heroAmount}>{peso.format(monthly)}</Text>
+        <View style={styles.heroMetaRow}>
+          <View>
+            <Text style={styles.heroMetaLabel}>Yearly projection</Text>
+            <Text style={styles.heroMetaValue}>{peso.format(monthly * 12)}</Text>
+          </View>
+          <View style={styles.heroDivider} />
+          <View>
+            <Text style={styles.heroMetaLabel}>Active services</Text>
+            <Text style={styles.heroMetaValue}>{items.length} {trialCount ? `· ${trialCount} trial` : ''}</Text>
+          </View>
+        </View>
+      </LinearGradient>
+      <View style={styles.sectionHeadingRow}>
+        <Text style={styles.sectionTitle}>Explore</Text>
+        <Text style={styles.sectionCaption}>Everything you need, right here</Text>
+      </View>
+      <View style={styles.menuGrid}>
+        {menuItems.map((item) => (
+          <PressableScale key={item.screen} style={styles.menuCard} onPress={() => onNavigate(item.screen)} accessibilityLabel={`${item.title}. ${item.caption}`}>
+            <View style={[styles.menuIcon, { backgroundColor: `${item.color}28` }]}>
+              <MaterialCommunityIcons name={item.icon} size={26} color={item.color} />
+            </View>
+            <Text style={styles.menuTitle}>{item.title}</Text>
+            <Text style={styles.menuCaption}>{item.caption}</Text>
+          </PressableScale>
+        ))}
+      </View>
+      {loaded && (
+        <View style={styles.nextCard}>
+          <View style={styles.nextIcon}>
+            <MaterialCommunityIcons name={next ? (next.icon as never) : 'calendar-heart'} size={24} color={next?.color ?? colors.slate} />
+          </View>
+          <View style={styles.flexOne}>
+            <Text style={styles.nextLabel}>NEXT CHARGE</Text>
+            {next ? (
+              <>
+                <Text style={styles.nextTitle}>{next.name}</Text>
+                <Text style={styles.nextCaption}>{formatShortDate(next.nextBillingDate)} · {dueLabel(next.nextBillingDate)}</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.nextTitle}>No subscriptions yet</Text>
+                <Text style={styles.nextCaption}>Add one to start tracking renewals.</Text>
+              </>
+            )}
+          </View>
+          {next && <Text style={styles.nextAmount}>{peso.format(next.price)}</Text>}
+        </View>
+      )}
+      <Text style={styles.localNote}><MaterialCommunityIcons name="shield-check-outline" size={14} /> Data stays on this device</Text>
+    </ScrollView>
+  );
+}
+
+function ScreenHeader({ title, subtitle, onBack }: { title: string; subtitle?: string; onBack: () => void }) {
+  return (
+    <View style={styles.screenHeader}>
+      <PressableScale style={styles.backButton} onPress={onBack} accessibilityLabel="Go back">
+        <MaterialCommunityIcons name="arrow-left" size={23} color={colors.ink} />
+      </PressableScale>
+      <View style={styles.headerTextWrap}>
+        <Text style={styles.screenTitle}>{title}</Text>
+        {subtitle ? <Text style={styles.screenSubtitle}>{subtitle}</Text> : null}
+      </View>
+      <View style={styles.headerSpacer} />
+    </View>
+  );
+}
+
+function SubscriptionsScreen({ items, onBack, onAdd, onEdit, onDelete }: { items: Subscription[]; onBack: () => void; onAdd: () => void; onEdit: (item: Subscription) => void; onDelete: (item: Subscription) => void }) {
+  const [query, setQuery] = useState('');
+  const filtered = items.filter((item) => `${item.name} ${item.category}`.toLowerCase().includes(query.toLowerCase()));
+  return (
+    <View style={styles.fullScreen}>
+      <ScreenHeader title="Subscriptions" subtitle={`${items.length} tracked locally`} onBack={onBack} />
+      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
+        <View style={styles.searchBox}>
+          <MaterialCommunityIcons name="magnify" size={22} color={colors.muted} />
+          <TextInput value={query} onChangeText={setQuery} placeholder="Search subscriptions" placeholderTextColor="#9B9CA3" style={styles.searchInput} returnKeyType="search" />
+          {query.length > 0 && (
+            <PressableScale onPress={() => setQuery('')} haptic={false}>
+              <MaterialCommunityIcons name="close-circle" size={20} color={colors.slate} />
+            </PressableScale>
+          )}
+        </View>
+        <PrimaryButton label="Add subscription" icon="plus" onPress={onAdd} />
+        {filtered.length ? filtered.map((item) => (
+          <SubscriptionCard key={item.id} item={item} onEdit={() => onEdit(item)} onDelete={() => onDelete(item)} />
+        )) : (
+          <EmptyState icon="credit-card-plus-outline" title={query ? 'No matches found' : 'Start tracking today'} caption={query ? 'Try a different name or category.' : 'Add your first recurring payment and SubTrack will keep it in view.'} />
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+function SubscriptionCard({ item, onEdit, onDelete }: { item: Subscription; onEdit: () => void; onDelete: () => void }) {
+  return (
+    <View style={styles.subscriptionCard}>
+      <View style={[styles.subscriptionIcon, { backgroundColor: `${item.color}26` }]}>
+        <MaterialCommunityIcons name={item.icon as never} size={25} color={item.color} />
+      </View>
+      <View style={styles.flexOne}>
+        <View style={styles.nameRow}>
+          <Text style={styles.subscriptionName} numberOfLines={1}>{item.name}</Text>
+          {item.isTrial && <Text style={styles.trialPill}>TRIAL</Text>}
+        </View>
+        <Text style={styles.subscriptionMeta}>{item.category} · {cycleLabels[item.billingCycle]}</Text>
+        <Text style={styles.subscriptionDate}>{formatShortDate(item.nextBillingDate)} · {dueLabel(item.nextBillingDate)}</Text>
+      </View>
+      <View style={styles.priceActions}>
+        <Text style={styles.subscriptionPrice}>{peso.format(item.price)}</Text>
+        <View style={styles.actionRow}>
+          <PressableScale onPress={onEdit} style={styles.miniAction} accessibilityLabel={`Edit ${item.name}`}>
+            <MaterialCommunityIcons name="pencil-outline" size={18} color={colors.slate} />
+          </PressableScale>
+          <PressableScale onPress={onDelete} style={styles.miniAction} accessibilityLabel={`Remove ${item.name}`}>
+            <MaterialCommunityIcons name="trash-can-outline" size={18} color={colors.danger} />
+          </PressableScale>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function CalendarScreen({ items, onBack }: { items: Subscription[]; onBack: () => void }) {
+  const groups = useMemo(() => {
+    const result = new Map<string, Subscription[]>();
+    items.forEach((item) => {
+      const key = new Intl.DateTimeFormat('en-PH', { month: 'long', year: 'numeric' }).format(new Date(`${item.nextBillingDate}T12:00:00`));
+      result.set(key, [...(result.get(key) ?? []), item]);
+    });
+    return [...result.entries()];
+  }, [items]);
+  return (
+    <View style={styles.fullScreen}>
+      <ScreenHeader title="Renewal calendar" subtitle="Your next billing dates" onBack={onBack} />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
+        {groups.length ? groups.map(([month, monthItems]) => (
+          <View key={month} style={styles.calendarSection}>
+            <Text style={styles.calendarMonth}>{month}</Text>
+            {monthItems.map((item, index) => {
+              const monthDay = formatMonthDay(item.nextBillingDate).replace(',', '').split(' ');
+              return (
+                <View key={item.id} style={styles.calendarRow}>
+                  <View style={styles.dateBadge}>
+                    <Text style={styles.dateBadgeMonth}>{monthDay[0].toUpperCase()}</Text>
+                    <Text style={styles.dateBadgeDay}>{monthDay[1]}</Text>
+                  </View>
+                  <View style={[styles.timeline, index === monthItems.length - 1 && styles.timelineLast]} />
+                  <View style={styles.calendarDetails}>
+                    <Text style={styles.subscriptionName}>{item.name}</Text>
+                    <Text style={styles.subscriptionMeta}>{dueLabel(item.nextBillingDate)}</Text>
+                  </View>
+                  <Text style={styles.calendarPrice}>{peso.format(item.price)}</Text>
+                </View>
+              );
+            })}
+          </View>
+        )) : <EmptyState icon="calendar-blank-outline" title="Your calendar is clear" caption="Billing dates appear here after you add a subscription." />}
+      </ScrollView>
+    </View>
+  );
+}
+
+function AnalyticsScreen({ items, onBack }: { items: Subscription[]; onBack: () => void }) {
+  const monthly = totalMonthly(items);
+  const categoryStats = categories.map((category) => ({
+    category,
+    amount: items.filter((item) => item.category === category).reduce((sum, item) => sum + monthlyEquivalent(item.price, item.billingCycle), 0),
+  })).filter((stat) => stat.amount > 0).sort((a, b) => b.amount - a.amount);
+  const max = Math.max(...categoryStats.map((stat) => stat.amount), 1);
+  return (
+    <View style={styles.fullScreen}>
+      <ScreenHeader title="Spending insights" subtitle="Monthly equivalents in Philippine peso" onBack={onBack} />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
+        <View style={styles.analyticsSummary}>
+          <View style={styles.analyticsIcon}><MaterialCommunityIcons name="chart-arc" size={31} color={colors.rose} /></View>
+          <Text style={styles.analyticsLabel}>TOTAL PER MONTH</Text>
+          <Text style={styles.analyticsAmount}>{peso.format(monthly)}</Text>
+          <Text style={styles.analyticsCaption}>{peso.format(monthly * 12)} projected annually</Text>
+        </View>
+        <Text style={styles.blockTitle}>Spend by category</Text>
+        <View style={styles.chartCard}>
+          {categoryStats.length ? categoryStats.map((stat) => (
+            <View key={stat.category} style={styles.barGroup}>
+              <View style={styles.barLabelRow}>
+                <View style={styles.inlineCenter}>
+                  <MaterialCommunityIcons name={categoryMeta[stat.category].icon as never} size={18} color={categoryMeta[stat.category].color} />
+                  <Text style={styles.barLabel}>{stat.category}</Text>
+                </View>
+                <Text style={styles.barValue}>{peso.format(stat.amount)}</Text>
+              </View>
+              <View style={styles.barTrack}>
+                <View style={[styles.barFill, { width: `${Math.max((stat.amount / max) * 100, 5)}%`, backgroundColor: categoryMeta[stat.category].color }]} />
+              </View>
+            </View>
+          )) : <Text style={styles.emptyInline}>Add subscriptions to unlock insights.</Text>}
+        </View>
+        <View style={styles.insightCard}>
+          <MaterialCommunityIcons name="lightbulb-on-outline" size={25} color={colors.peach} />
+          <View style={styles.flexOne}>
+            <Text style={styles.insightTitle}>A useful baseline</Text>
+            <Text style={styles.insightText}>Your recurring services account for {peso.format(monthly / 30)} per day on average.</Text>
+          </View>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function CategoriesScreen({ items, onBack }: { items: Subscription[]; onBack: () => void }) {
+  return (
+    <View style={styles.fullScreen}>
+      <ScreenHeader title="Categories" subtitle="A tidy view of recurring spending" onBack={onBack} />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
+        <View style={styles.categoryGrid}>
+          {categories.map((category) => {
+            const categoryItems = items.filter((item) => item.category === category);
+            const meta = categoryMeta[category];
+            return (
+              <View key={category} style={styles.categoryCard}>
+                <View style={[styles.categoryIcon, { backgroundColor: `${meta.color}26` }]}>
+                  <MaterialCommunityIcons name={meta.icon as never} size={26} color={meta.color} />
+                </View>
+                <Text style={styles.categoryTitle}>{category}</Text>
+                <Text style={styles.categoryCount}>{categoryItems.length} {categoryItems.length === 1 ? 'service' : 'services'}</Text>
+                <Text style={styles.categoryAmount}>{peso.format(totalMonthly(categoryItems))} / mo</Text>
+              </View>
+            );
+          })}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function TrialsScreen({ items, onBack, onAdd, onEdit }: { items: Subscription[]; onBack: () => void; onAdd: () => void; onEdit: (item: Subscription) => void }) {
+  const trials = items.filter((item) => item.isTrial).sort((a, b) => (a.trialEndDate ?? a.nextBillingDate).localeCompare(b.trialEndDate ?? b.nextBillingDate));
+  return (
+    <View style={styles.fullScreen}>
+      <ScreenHeader title="Free trials" subtitle="Know before the first charge" onBack={onBack} />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
+        {trials.length ? trials.map((item) => {
+          const endDate = item.trialEndDate ?? item.nextBillingDate;
+          return (
+            <PressableScale key={item.id} style={styles.trialCard} onPress={() => onEdit(item)} accessibilityLabel={`Edit ${item.name} trial`}>
+              <View style={[styles.trialIcon, { backgroundColor: `${item.color}25` }]}><MaterialCommunityIcons name="timer-outline" size={27} color={item.color} /></View>
+              <View style={styles.flexOne}>
+                <Text style={styles.subscriptionName}>{item.name}</Text>
+                <Text style={styles.subscriptionMeta}>Trial ends {formatShortDate(endDate)}</Text>
+                <Text style={styles.trialDue}>{dueLabel(endDate)}</Text>
+              </View>
+              <View style={styles.trialPriceWrap}>
+                <Text style={styles.subscriptionPrice}>{peso.format(item.price)}</Text>
+                <Text style={styles.afterTrial}>after trial</Text>
+              </View>
+            </PressableScale>
+          );
+        }) : (
+          <>
+            <EmptyState icon="timer-sand-empty" title="No trials to watch" caption="Mark a subscription as a free trial and its end date will appear here." />
+            <PrimaryButton label="Add a free trial" icon="plus" onPress={onAdd} />
+          </>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription | null; onBack: () => void; onSave: (draft: SubscriptionDraft) => Promise<void> }) {
+  const defaultDate = useMemo(() => {
+    const date = new Date();
+    date.setDate(date.getDate() + 30);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }, []);
+  const [name, setName] = useState(initial?.name ?? '');
+  const [price, setPrice] = useState(initial ? String(initial.price) : '');
+  const [category, setCategory] = useState<CategoryName>(initial?.category ?? 'Entertainment');
+  const [cycle, setCycle] = useState<BillingCycle>(initial?.billingCycle ?? 'monthly');
+  const [billingDate, setBillingDate] = useState(initial?.nextBillingDate ?? defaultDate);
+  const [isTrial, setIsTrial] = useState(initial?.isTrial ?? false);
+  const [trialEndDate, setTrialEndDate] = useState(initial?.trialEndDate ?? defaultDate);
+  const [reminderDays, setReminderDays] = useState(initial?.reminderDays ?? 3);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(initial?.notificationsEnabled ?? true);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const numericPrice = Number(price.replace(/,/g, ''));
+    if (!name.trim()) return Alert.alert('Add a name', 'Enter the service or subscription name.');
+    if (!Number.isFinite(numericPrice) || numericPrice <= 0) return Alert.alert('Check the amount', 'Enter a price greater than zero.');
+    if (!isValidISODate(billingDate)) return Alert.alert('Check the billing date', 'Use the YYYY-MM-DD format.');
+    if (isTrial && !isValidISODate(trialEndDate)) return Alert.alert('Check the trial end date', 'Use the YYYY-MM-DD format.');
+    const meta = categoryMeta[category];
+    setSaving(true);
+    await onSave({
+      name: name.trim(), price: numericPrice, category, billingCycle: cycle,
+      nextBillingDate: billingDate, color: meta.color, icon: meta.icon,
+      isTrial, trialEndDate: isTrial ? trialEndDate : null,
+      reminderDays, notificationsEnabled,
+    });
+    setSaving(false);
+  };
+
+  return (
+    <View style={styles.fullScreen}>
+      <ScreenHeader title={initial ? 'Edit subscription' : 'New subscription'} subtitle="Stored privately on this device" onBack={onBack} />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flexOne}>
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.formContent}>
+          <FieldLabel icon="text-short" label="Subscription name" />
+          <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="e.g. Netflix" placeholderTextColor="#A2A1A0" autoCapitalize="words" returnKeyType="next" />
+          <FieldLabel icon="cash" label="Price in Philippine peso" />
+          <View style={styles.amountInputWrap}>
+            <Text style={styles.pesoPrefix}>₱</Text>
+            <TextInput style={styles.amountInput} value={price} onChangeText={setPrice} placeholder="0.00" placeholderTextColor="#A2A1A0" keyboardType="decimal-pad" />
+          </View>
+          <FieldLabel icon="shape-outline" label="Category" />
+          <View style={styles.chipWrap}>
+            {categories.map((item) => <ChoiceChip key={item} selected={item === category} label={item} icon={categoryMeta[item].icon} color={categoryMeta[item].color} onPress={() => setCategory(item)} />)}
+          </View>
+          <FieldLabel icon="repeat" label="Billing cycle" />
+          <View style={styles.chipWrap}>
+            {(Object.keys(cycleLabels) as BillingCycle[]).map((item) => <ChoiceChip key={item} selected={item === cycle} label={cycleLabels[item]} onPress={() => setCycle(item)} />)}
+          </View>
+          <FieldLabel icon="calendar-outline" label="Next billing date" />
+          <TextInput style={styles.input} value={billingDate} onChangeText={setBillingDate} placeholder={todayISO()} placeholderTextColor="#A2A1A0" keyboardType="numbers-and-punctuation" maxLength={10} />
+          <Text style={styles.helperText}>Use YYYY-MM-DD</Text>
+          <View style={styles.toggleCard}>
+            <View style={styles.toggleTextWrap}>
+              <View style={styles.inlineCenter}><MaterialCommunityIcons name="timer-sand" size={21} color={colors.rose} /><Text style={styles.toggleTitle}>This is a free trial</Text></View>
+              <Text style={styles.toggleCaption}>Track the last free day before billing starts.</Text>
+            </View>
+            <Switch value={isTrial} onValueChange={setIsTrial} trackColor={{ false: '#D7D2CB', true: colors.peach }} thumbColor={isTrial ? colors.rose : '#F8F5EF'} />
+          </View>
+          {isTrial && (
+            <>
+              <FieldLabel icon="calendar-clock" label="Trial end date" />
+              <TextInput style={styles.input} value={trialEndDate} onChangeText={setTrialEndDate} placeholder={todayISO()} placeholderTextColor="#A2A1A0" keyboardType="numbers-and-punctuation" maxLength={10} />
+            </>
+          )}
+          <View style={styles.toggleCard}>
+            <View style={styles.toggleTextWrap}>
+              <View style={styles.inlineCenter}><MaterialCommunityIcons name="bell-outline" size={21} color={colors.slate} /><Text style={styles.toggleTitle}>Renewal reminder</Text></View>
+              <Text style={styles.toggleCaption}>A local notification, even when SubTrack is closed.</Text>
+            </View>
+            <Switch value={notificationsEnabled} onValueChange={setNotificationsEnabled} trackColor={{ false: '#D7D2CB', true: colors.apricot }} thumbColor={notificationsEnabled ? colors.slate : '#F8F5EF'} />
+          </View>
+          {notificationsEnabled && (
+            <>
+              <FieldLabel icon="clock-alert-outline" label="Remind me before" />
+              <View style={styles.chipWrap}>
+                {[0, 1, 3, 7].map((days) => <ChoiceChip key={days} selected={days === reminderDays} label={days === 0 ? 'Same day' : `${days} day${days > 1 ? 's' : ''}`} onPress={() => setReminderDays(days)} />)}
+              </View>
+            </>
+          )}
+          <PrimaryButton label={saving ? 'Saving…' : initial ? 'Save changes' : 'Start tracking'} icon={saving ? 'timer-sand' : 'check'} onPress={() => void submit()} disabled={saving} />
+          <Text style={styles.formFooter}>No account required · Local database only</Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
+
+function FieldLabel({ icon, label }: { icon: string; label: string }) {
+  return <View style={styles.fieldLabelRow}><MaterialCommunityIcons name={icon as never} size={18} color={colors.slate} /><Text style={styles.fieldLabel}>{label}</Text></View>;
+}
+
+function ChoiceChip({ selected, label, icon, color = colors.rose, onPress }: { selected: boolean; label: string; icon?: string; color?: string; onPress: () => void }) {
+  return (
+    <PressableScale style={[styles.choiceChip, selected && { borderColor: color, backgroundColor: `${color}1F` }]} onPress={onPress} accessibilityLabel={`${label}${selected ? ', selected' : ''}`}>
+      {icon && <MaterialCommunityIcons name={icon as never} size={17} color={selected ? color : colors.muted} />}
+      <Text style={[styles.choiceChipText, selected && { color: colors.ink }]}>{label}</Text>
+    </PressableScale>
+  );
+}
+
+function PrimaryButton({ label, icon, onPress, disabled = false }: { label: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; onPress: () => void; disabled?: boolean }) {
+  return (
+    <PressableScale style={styles.primaryButton} onPress={onPress} disabled={disabled} accessibilityLabel={label}>
+      <LinearGradient colors={[colors.rose, '#D99B98']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryGradient}>
+        <MaterialCommunityIcons name={icon} size={21} color={colors.white} />
+        <Text style={styles.primaryButtonText}>{label}</Text>
+      </LinearGradient>
+    </PressableScale>
+  );
+}
+
+function EmptyState({ icon, title, caption }: { icon: keyof typeof MaterialCommunityIcons.glyphMap; title: string; caption: string }) {
+  return (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIcon}><MaterialCommunityIcons name={icon} size={38} color={colors.rose} /></View>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyCaption}>{caption}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  app: { flex: 1, backgroundColor: colors.cream }, safeArea: { flex: 1 }, screen: { flex: 1 },
+  fullScreen: { flex: 1, width: '100%', maxWidth: 620, alignSelf: 'center' }, flexOne: { flex: 1 },
+  blob: { position: 'absolute', borderRadius: 999, opacity: 0.35 },
+  blobTop: { width: 260, height: 260, backgroundColor: colors.peach, top: -125, right: -95 },
+  blobBottom: { width: 230, height: 230, backgroundColor: colors.slate, bottom: -135, left: -110, opacity: 0.15 },
+  overviewContent: { width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 18, paddingBottom: 36 },
+  brandRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 },
+  eyebrow: { color: colors.muted, fontSize: 13, fontWeight: '600', letterSpacing: 0.2 },
+  title: { color: colors.ink, fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -0.8 },
+  brandIcon: { width: 48, height: 48, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.white}C9`, borderWidth: 1, borderColor: `${colors.white}E0` },
+  hero: { borderRadius: 28, padding: 24, overflow: 'hidden', ...shadows.card },
+  heroGlow: { position: 'absolute', width: 160, height: 160, borderRadius: 80, right: -45, top: -55, backgroundColor: '#FFFFFF25' },
+  heroLabel: { color: '#FFF9F3CC', fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
+  heroAmount: { color: colors.white, fontSize: 37, lineHeight: 47, fontWeight: '800', letterSpacing: -1.1, marginTop: 3 },
+  heroMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 18 },
+  heroMetaLabel: { color: '#FFF9F3B8', fontSize: 11, marginBottom: 3 }, heroMetaValue: { color: colors.white, fontSize: 14, fontWeight: '700' },
+  heroDivider: { width: 1, height: 34, backgroundColor: '#FFFFFF50', marginHorizontal: 22 },
+  sectionHeadingRow: { marginTop: 28, marginBottom: 14 }, sectionTitle: { fontSize: 21, fontWeight: '800', color: colors.ink, letterSpacing: -0.3 },
+  sectionCaption: { color: colors.muted, fontSize: 13, marginTop: 2 },
+  menuGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 },
+  menuCard: { width: '48.3%', minHeight: 148, borderRadius: 23, padding: 17, backgroundColor: `${colors.surface}E8`, borderWidth: 1, borderColor: '#FFFFFFD9', ...shadows.card },
+  menuIcon: { width: 47, height: 47, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
+  menuTitle: { color: colors.ink, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 }, menuCaption: { color: colors.muted, fontSize: 11.5, lineHeight: 16, marginTop: 3 },
+  nextCard: { flexDirection: 'row', alignItems: 'center', marginTop: 18, padding: 17, borderRadius: 21, backgroundColor: `${colors.surface}E6`, borderWidth: 1, borderColor: '#FFFFFFD5' },
+  nextIcon: { width: 45, height: 45, borderRadius: 15, backgroundColor: `${colors.slate}1C`, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  nextLabel: { color: colors.rose, fontSize: 9.5, letterSpacing: 1, fontWeight: '800' }, nextTitle: { color: colors.ink, fontSize: 15, fontWeight: '800', marginTop: 2 },
+  nextCaption: { color: colors.muted, fontSize: 11.5, marginTop: 2 }, nextAmount: { color: colors.ink, fontSize: 14, fontWeight: '800', marginLeft: 8 },
+  localNote: { alignSelf: 'center', color: colors.muted, fontSize: 11.5, marginTop: 18 },
+  screenHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16 },
+  backButton: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.surface}DE`, borderWidth: 1, borderColor: colors.white },
+  headerTextWrap: { flex: 1, alignItems: 'center', paddingHorizontal: 10 }, screenTitle: { color: colors.ink, fontSize: 20, fontWeight: '800', letterSpacing: -0.35, textAlign: 'center' },
+  screenSubtitle: { color: colors.muted, fontSize: 11.5, marginTop: 2, textAlign: 'center' }, headerSpacer: { width: 44 }, listContent: { paddingHorizontal: 20, paddingBottom: 42 },
+  searchBox: { height: 52, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, backgroundColor: colors.surface, borderRadius: 18, borderWidth: 1, borderColor: colors.white, marginBottom: 13 },
+  searchInput: { flex: 1, height: '100%', color: colors.ink, fontSize: 15, paddingHorizontal: 10 },
+  primaryButton: { borderRadius: 18, overflow: 'hidden', marginVertical: 8, ...shadows.card }, primaryGradient: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 20 },
+  primaryButtonText: { color: colors.white, fontWeight: '800', fontSize: 15 },
+  subscriptionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: `${colors.surface}F2`, borderRadius: 22, padding: 15, marginTop: 12, borderWidth: 1, borderColor: colors.white, ...shadows.card },
+  subscriptionIcon: { width: 50, height: 50, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  subscriptionName: { color: colors.ink, fontSize: 15.5, fontWeight: '800', flexShrink: 1 }, trialPill: { color: colors.rose, fontSize: 8, fontWeight: '900', letterSpacing: 0.7, backgroundColor: `${colors.rose}1B`, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
+  subscriptionMeta: { color: colors.muted, fontSize: 11.5, marginTop: 3 }, subscriptionDate: { color: colors.rose, fontSize: 10.5, fontWeight: '700', marginTop: 4 },
+  priceActions: { alignItems: 'flex-end', marginLeft: 7 }, subscriptionPrice: { color: colors.ink, fontSize: 13.5, fontWeight: '800' }, actionRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
+  miniAction: { width: 31, height: 31, borderRadius: 10, backgroundColor: `${colors.slate}12`, alignItems: 'center', justifyContent: 'center' },
+  emptyState: { alignItems: 'center', backgroundColor: `${colors.surface}D9`, borderRadius: 26, paddingHorizontal: 28, paddingVertical: 40, marginTop: 18, borderWidth: 1, borderColor: colors.white },
+  emptyIcon: { width: 76, height: 76, borderRadius: 26, backgroundColor: `${colors.rose}1A`, alignItems: 'center', justifyContent: 'center', marginBottom: 17 },
+  emptyTitle: { color: colors.ink, fontSize: 18, fontWeight: '800', textAlign: 'center' }, emptyCaption: { color: colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 7 },
+  calendarSection: { backgroundColor: `${colors.surface}E8`, borderRadius: 24, padding: 17, marginBottom: 14, borderWidth: 1, borderColor: colors.white }, calendarMonth: { color: colors.ink, fontSize: 16, fontWeight: '800', marginBottom: 13 },
+  calendarRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', position: 'relative' }, dateBadge: { width: 47, height: 53, borderRadius: 15, backgroundColor: `${colors.rose}1C`, alignItems: 'center', justifyContent: 'center', zIndex: 2 },
+  dateBadgeMonth: { color: colors.rose, fontSize: 8.5, fontWeight: '900', letterSpacing: 0.5 }, dateBadgeDay: { color: colors.ink, fontSize: 19, fontWeight: '800', lineHeight: 22 },
+  timeline: { position: 'absolute', width: 2, height: 23, left: 22.5, bottom: -1, backgroundColor: `${colors.rose}37` }, timelineLast: { display: 'none' },
+  calendarDetails: { flex: 1, paddingHorizontal: 12 }, calendarPrice: { color: colors.ink, fontSize: 13, fontWeight: '800' },
+  analyticsSummary: { alignItems: 'center', padding: 25, borderRadius: 27, backgroundColor: `${colors.surface}EE`, borderWidth: 1, borderColor: colors.white, ...shadows.card },
+  analyticsIcon: { width: 58, height: 58, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.rose}19`, marginBottom: 13 },
+  analyticsLabel: { color: colors.muted, fontSize: 10, fontWeight: '800', letterSpacing: 1 }, analyticsAmount: { color: colors.ink, fontSize: 33, fontWeight: '800', letterSpacing: -0.8, marginTop: 5 },
+  analyticsCaption: { color: colors.rose, fontSize: 12, fontWeight: '700', marginTop: 5 }, blockTitle: { color: colors.ink, fontSize: 17, fontWeight: '800', marginTop: 24, marginBottom: 11 },
+  chartCard: { backgroundColor: `${colors.surface}EA`, borderRadius: 24, padding: 18, borderWidth: 1, borderColor: colors.white }, barGroup: { marginBottom: 17 },
+  barLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }, inlineCenter: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  barLabel: { color: colors.ink, fontSize: 13, fontWeight: '700' }, barValue: { color: colors.muted, fontSize: 12, fontWeight: '700' }, barTrack: { height: 8, borderRadius: 6, backgroundColor: '#ECE6DE', overflow: 'hidden' },
+  barFill: { height: '100%', borderRadius: 6 }, emptyInline: { color: colors.muted, textAlign: 'center', paddingVertical: 18 }, insightCard: { flexDirection: 'row', gap: 13, backgroundColor: `${colors.apricot}36`, borderRadius: 21, padding: 17, marginTop: 14 },
+  insightTitle: { color: colors.ink, fontSize: 14, fontWeight: '800' }, insightText: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 3 },
+  categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 }, categoryCard: { width: '48.3%', minHeight: 160, padding: 16, borderRadius: 22, backgroundColor: `${colors.surface}ED`, borderWidth: 1, borderColor: colors.white, ...shadows.card },
+  categoryIcon: { width: 47, height: 47, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12 }, categoryTitle: { color: colors.ink, fontSize: 14.5, fontWeight: '800' },
+  categoryCount: { color: colors.muted, fontSize: 11, marginTop: 3 }, categoryAmount: { color: colors.rose, fontSize: 12, fontWeight: '800', marginTop: 10 },
+  trialCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: `${colors.surface}EE`, borderRadius: 22, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: colors.white, ...shadows.card },
+  trialIcon: { width: 50, height: 50, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, trialDue: { color: colors.rose, fontSize: 11, fontWeight: '800', marginTop: 5 },
+  trialPriceWrap: { alignItems: 'flex-end', marginLeft: 8 }, afterTrial: { color: colors.muted, fontSize: 9.5, marginTop: 3 }, formContent: { paddingHorizontal: 20, paddingBottom: 48 },
+  fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 18, marginBottom: 8 }, fieldLabel: { color: colors.ink, fontSize: 13, fontWeight: '800' },
+  input: { height: 54, borderRadius: 17, paddingHorizontal: 16, backgroundColor: colors.surface, color: colors.ink, fontSize: 15, borderWidth: 1, borderColor: colors.white },
+  amountInputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', borderRadius: 17, paddingHorizontal: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.white },
+  pesoPrefix: { color: colors.rose, fontSize: 20, fontWeight: '800', marginRight: 8 }, amountInput: { flex: 1, height: '100%', color: colors.ink, fontSize: 17, fontWeight: '700' },
+  helperText: { color: colors.muted, fontSize: 10.5, marginTop: 5, marginLeft: 3 }, chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  choiceChip: { minHeight: 39, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, borderRadius: 13, backgroundColor: `${colors.surface}C9`, borderWidth: 1, borderColor: colors.line },
+  choiceChipText: { color: colors.muted, fontSize: 11.5, fontWeight: '700' }, toggleCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: `${colors.surface}D9`, borderRadius: 19, padding: 15, marginTop: 20, borderWidth: 1, borderColor: colors.white },
+  toggleTextWrap: { flex: 1, paddingRight: 12 }, toggleTitle: { color: colors.ink, fontSize: 13.5, fontWeight: '800' }, toggleCaption: { color: colors.muted, fontSize: 10.5, lineHeight: 15, marginTop: 5 },
+  formFooter: { color: colors.muted, fontSize: 10.5, textAlign: 'center', marginTop: 8 }, launch: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 100, backgroundColor: colors.cream, alignItems: 'center', justifyContent: 'center' },
+  launchInner: { alignItems: 'center' }, launchIcon: { width: 92, height: 92, borderRadius: 31, alignItems: 'center', justifyContent: 'center', marginBottom: 19, ...shadows.card },
+  launchTitle: { color: colors.ink, fontSize: 34, fontWeight: '900', letterSpacing: -1 }, launchCaption: { color: colors.muted, fontSize: 13, marginTop: 5 },
 });
