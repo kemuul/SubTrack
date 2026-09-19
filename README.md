@@ -18,6 +18,7 @@ Scan the QR code with Expo Go, or run `npm.cmd run android` with an Android emul
 - Philippine-peso summaries and annual projections
 - Renewal calendar, category breakdown, and analytics
 - Free-trial tracking
+- One-tap 1-, 3-, and 7-day trial presets with native calendar pickers
 - Local Android renewal notifications scheduled across upcoming billing cycles
 - Animated launch, screen transitions, press feedback, and haptics
 

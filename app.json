@@ -2,7 +2,7 @@
   "expo": {
     "name": "SubTrack",
     "slug": "subtrack",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -11,6 +11,7 @@
     },
     "android": {
       "package": "com.subtrack.app",
+      "versionCode": 2,
       "permissions": [
         "POST_NOTIFICATIONS",
         "SCHEDULE_EXACT_ALARM"
@@ -34,7 +35,8 @@
           "color": "#C78997",
           "defaultChannel": "renewal-reminders"
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "description": "A private, local-first subscription and renewal tracker.",
     "primaryColor": "#C78997"

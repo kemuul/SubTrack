@@ -15,6 +15,9 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import DateTimePicker, {
+  type DateTimePickerEvent,
+} from '@react-native-community/datetimepicker';
 import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
@@ -48,8 +51,10 @@ import {
   greeting,
   isValidISODate,
   monthlyEquivalent,
+  parseLocalDate,
   peso,
   todayISO,
+  toLocalISODate,
   totalMonthly,
 } from './src/utils';
 
@@ -308,9 +313,20 @@ function Overview({ items, loaded, onNavigate }: { items: Subscription[]; loaded
       </View>
       <View style={styles.menuGrid}>
         {menuItems.map((item) => (
-          <PressableScale key={item.screen} style={styles.menuCard} onPress={() => onNavigate(item.screen)} accessibilityLabel={`${item.title}. ${item.caption}`}>
-            <View style={[styles.menuIcon, { backgroundColor: `${item.color}28` }]}>
-              <MaterialCommunityIcons name={item.icon} size={26} color={item.color} />
+          <PressableScale
+            key={item.screen}
+            style={[
+              styles.menuCard,
+              {
+                backgroundColor: `${item.color}B8`,
+                borderColor: `${item.color}E8`,
+              },
+            ]}
+            onPress={() => onNavigate(item.screen)}
+            accessibilityLabel={`${item.title}. ${item.caption}`}
+          >
+            <View style={styles.menuIcon}>
+              <MaterialCommunityIcons name={item.icon} size={27} color={colors.ink} />
             </View>
             <Text style={styles.menuTitle}>{item.title}</Text>
             <Text style={styles.menuCaption}>{item.caption}</Text>
@@ -576,6 +592,34 @@ function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription |
   const [reminderDays, setReminderDays] = useState(initial?.reminderDays ?? 3);
   const [notificationsEnabled, setNotificationsEnabled] = useState(initial?.notificationsEnabled ?? true);
   const [saving, setSaving] = useState(false);
+  const [showBillingPicker, setShowBillingPicker] = useState(false);
+  const [showTrialPicker, setShowTrialPicker] = useState(false);
+  const [selectedTrialDays, setSelectedTrialDays] = useState<number | null>(null);
+
+  const chooseTrialDuration = (days: number) => {
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + days);
+    setTrialEndDate(toLocalISODate(endDate));
+    setSelectedTrialDays(days);
+  };
+
+  const toggleTrial = (enabled: boolean) => {
+    setIsTrial(enabled);
+    if (enabled && !isTrial) chooseTrialDuration(7);
+  };
+
+  const changeBillingDate = (event: DateTimePickerEvent, date?: Date) => {
+    setShowBillingPicker(false);
+    if (event.type === 'set' && date) setBillingDate(toLocalISODate(date));
+  };
+
+  const changeTrialEndDate = (event: DateTimePickerEvent, date?: Date) => {
+    setShowTrialPicker(false);
+    if (event.type === 'set' && date) {
+      setTrialEndDate(toLocalISODate(date));
+      setSelectedTrialDays(null);
+    }
+  };
 
   const submit = async () => {
     const numericPrice = Number(price.replace(/,/g, ''));
@@ -615,19 +659,74 @@ function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription |
             {(Object.keys(cycleLabels) as BillingCycle[]).map((item) => <ChoiceChip key={item} selected={item === cycle} label={cycleLabels[item]} onPress={() => setCycle(item)} />)}
           </View>
           <FieldLabel icon="calendar-outline" label="Next billing date" />
-          <TextInput style={styles.input} value={billingDate} onChangeText={setBillingDate} placeholder={todayISO()} placeholderTextColor="#A2A1A0" keyboardType="numbers-and-punctuation" maxLength={10} />
-          <Text style={styles.helperText}>Use YYYY-MM-DD</Text>
+          <View style={styles.dateInputWrap}>
+            <TextInput style={styles.dateTextInput} value={billingDate} onChangeText={setBillingDate} placeholder={todayISO()} placeholderTextColor="#A2A1A0" keyboardType="numbers-and-punctuation" maxLength={10} />
+            <PressableScale style={styles.calendarButton} onPress={() => setShowBillingPicker(true)} accessibilityLabel="Choose next billing date from calendar">
+              <MaterialCommunityIcons name="calendar-month-outline" size={23} color={colors.rose} />
+            </PressableScale>
+          </View>
+          <Text style={styles.helperText}>Choose from the calendar or use YYYY-MM-DD</Text>
+          {showBillingPicker && (
+            <DateTimePicker
+              value={isValidISODate(billingDate) ? parseLocalDate(billingDate) : new Date()}
+              mode="date"
+              display={Platform.OS === 'android' ? 'calendar' : 'compact'}
+              minimumDate={new Date()}
+              onChange={changeBillingDate}
+              accentColor={colors.rose}
+            />
+          )}
           <View style={styles.toggleCard}>
             <View style={styles.toggleTextWrap}>
               <View style={styles.inlineCenter}><MaterialCommunityIcons name="timer-sand" size={21} color={colors.rose} /><Text style={styles.toggleTitle}>This is a free trial</Text></View>
               <Text style={styles.toggleCaption}>Track the last free day before billing starts.</Text>
             </View>
-            <Switch value={isTrial} onValueChange={setIsTrial} trackColor={{ false: '#D7D2CB', true: colors.peach }} thumbColor={isTrial ? colors.rose : '#F8F5EF'} />
+            <Switch value={isTrial} onValueChange={toggleTrial} trackColor={{ false: '#D7D2CB', true: colors.peach }} thumbColor={isTrial ? colors.rose : '#F8F5EF'} />
           </View>
           {isTrial && (
             <>
+              <FieldLabel icon="timer-edit-outline" label="Quick trial length" />
+              <View style={styles.chipWrap}>
+                {[1, 3, 7].map((days) => (
+                  <ChoiceChip
+                    key={days}
+                    selected={selectedTrialDays === days}
+                    label={`${days} day${days > 1 ? 's' : ''}`}
+                    icon="clock-fast"
+                    color={colors.peach}
+                    onPress={() => chooseTrialDuration(days)}
+                  />
+                ))}
+              </View>
               <FieldLabel icon="calendar-clock" label="Trial end date" />
-              <TextInput style={styles.input} value={trialEndDate} onChangeText={setTrialEndDate} placeholder={todayISO()} placeholderTextColor="#A2A1A0" keyboardType="numbers-and-punctuation" maxLength={10} />
+              <View style={styles.dateInputWrap}>
+                <TextInput
+                  style={styles.dateTextInput}
+                  value={trialEndDate}
+                  onChangeText={(value) => {
+                    setTrialEndDate(value);
+                    setSelectedTrialDays(null);
+                  }}
+                  placeholder={todayISO()}
+                  placeholderTextColor="#A2A1A0"
+                  keyboardType="numbers-and-punctuation"
+                  maxLength={10}
+                />
+                <PressableScale style={styles.calendarButton} onPress={() => setShowTrialPicker(true)} accessibilityLabel="Choose trial end date from calendar">
+                  <MaterialCommunityIcons name="calendar-month-outline" size={23} color={colors.rose} />
+                </PressableScale>
+              </View>
+              <Text style={styles.helperText}>Use a quick length, calendar, or enter YYYY-MM-DD</Text>
+              {showTrialPicker && (
+                <DateTimePicker
+                  value={isValidISODate(trialEndDate) ? parseLocalDate(trialEndDate) : new Date()}
+                  mode="date"
+                  display={Platform.OS === 'android' ? 'calendar' : 'compact'}
+                  minimumDate={new Date()}
+                  onChange={changeTrialEndDate}
+                  accentColor={colors.rose}
+                />
+              )}
             </>
           )}
           <View style={styles.toggleCard}>
@@ -707,10 +806,10 @@ const styles = StyleSheet.create({
   heroDivider: { width: 1, height: 34, backgroundColor: '#FFFFFF50', marginHorizontal: 22 },
   sectionHeadingRow: { marginTop: 28, marginBottom: 14 }, sectionTitle: { fontSize: 21, fontWeight: '800', color: colors.ink, letterSpacing: -0.3 },
   sectionCaption: { color: colors.muted, fontSize: 13, marginTop: 2 },
-  menuGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 },
-  menuCard: { width: '48.3%', minHeight: 148, borderRadius: 23, padding: 17, backgroundColor: `${colors.surface}E8`, borderWidth: 1, borderColor: '#FFFFFFD9', ...shadows.card },
-  menuIcon: { width: 47, height: 47, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
-  menuTitle: { color: colors.ink, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 }, menuCaption: { color: colors.muted, fontSize: 11.5, lineHeight: 16, marginTop: 3 },
+  menuGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 },
+  menuCard: { width: '48%', maxWidth: 190, aspectRatio: 1, borderRadius: 23, padding: 17, justifyContent: 'center', borderWidth: 1, ...shadows.card },
+  menuIcon: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 13, backgroundColor: '#FFFFFF70' },
+  menuTitle: { color: colors.ink, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 }, menuCaption: { color: '#535866', fontSize: 11.5, lineHeight: 16, marginTop: 3 },
   nextCard: { flexDirection: 'row', alignItems: 'center', marginTop: 18, padding: 17, borderRadius: 21, backgroundColor: `${colors.surface}E6`, borderWidth: 1, borderColor: '#FFFFFFD5' },
   nextIcon: { width: 45, height: 45, borderRadius: 15, backgroundColor: `${colors.slate}1C`, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   nextLabel: { color: colors.rose, fontSize: 9.5, letterSpacing: 1, fontWeight: '800' }, nextTitle: { color: colors.ink, fontSize: 15, fontWeight: '800', marginTop: 2 },
@@ -757,6 +856,9 @@ const styles = StyleSheet.create({
   input: { height: 54, borderRadius: 17, paddingHorizontal: 16, backgroundColor: colors.surface, color: colors.ink, fontSize: 15, borderWidth: 1, borderColor: colors.white },
   amountInputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', borderRadius: 17, paddingHorizontal: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.white },
   pesoPrefix: { color: colors.rose, fontSize: 20, fontWeight: '800', marginRight: 8 }, amountInput: { flex: 1, height: '100%', color: colors.ink, fontSize: 17, fontWeight: '700' },
+  dateInputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', borderRadius: 17, paddingLeft: 16, paddingRight: 6, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.white },
+  dateTextInput: { flex: 1, height: '100%', color: colors.ink, fontSize: 15 },
+  calendarButton: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.rose}18` },
   helperText: { color: colors.muted, fontSize: 10.5, marginTop: 5, marginLeft: 3 }, chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   choiceChip: { minHeight: 39, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, borderRadius: 13, backgroundColor: `${colors.surface}C9`, borderWidth: 1, borderColor: colors.line },
   choiceChipText: { color: colors.muted, fontSize: 11.5, fontWeight: '700' }, toggleCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: `${colors.surface}D9`, borderRadius: 19, padding: 15, marginTop: 20, borderWidth: 1, borderColor: colors.white },

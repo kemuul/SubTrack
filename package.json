@@ -1,9 +1,10 @@
 {
   "name": "subtrack",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "index.ts",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
+    "@react-native-community/datetimepicker": "9.1.0",
     "expo": "~57.0.24",
     "expo-haptics": "~57.0.3",
     "expo-linear-gradient": "~57.0.2",
