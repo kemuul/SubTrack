@@ -96,6 +96,8 @@ function SubTrackApp() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [screen, setScreen] = useState<ScreenName>('overview');
   const [editing, setEditing] = useState<Subscription | null>(null);
+  const [formPreset, setFormPreset] = useState<'subscription' | 'trial'>('subscription');
+  const [formReturnScreen, setFormReturnScreen] = useState<ScreenName>('overview');
   const [loaded, setLoaded] = useState(false);
   const [showLaunch, setShowLaunch] = useState(true);
   const screenOpacity = useRef(new Animated.Value(1)).current;
@@ -144,21 +146,32 @@ function SubTrackApp() {
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (screen === 'overview') return false;
-      const destination = screen === 'form' && editing ? 'subscriptions' : 'overview';
+      const destination = screen === 'form' ? formReturnScreen : 'overview';
       setEditing(null);
       setScreen(destination);
       return true;
     });
     return () => subscription.remove();
-  }, [screen, editing]);
+  }, [screen, formReturnScreen]);
 
   const navigate = (next: ScreenName) => {
-    if (next === 'form') setEditing(null);
     setScreen(next);
   };
 
-  const edit = (subscription: Subscription) => {
+  const openNewForm = (
+    preset: 'subscription' | 'trial',
+    returnScreen: ScreenName,
+  ) => {
+    setEditing(null);
+    setFormPreset(preset);
+    setFormReturnScreen(returnScreen);
+    setScreen('form');
+  };
+
+  const edit = (subscription: Subscription, returnScreen: ScreenName) => {
     setEditing(subscription);
+    setFormPreset(subscription.isTrial ? 'trial' : 'subscription');
+    setFormReturnScreen(returnScreen);
     setScreen('form');
   };
 
@@ -181,7 +194,7 @@ function SubTrackApp() {
       await setNotificationId(db, saved.id, notificationId);
       await load();
       setEditing(null);
-      setScreen('subscriptions');
+      setScreen(draft.isTrial ? 'trials' : 'subscriptions');
       if (draft.notificationsEnabled && !notificationId) {
         Alert.alert(
           'Saved without a reminder',
@@ -221,7 +234,7 @@ function SubTrackApp() {
   let currentScreen;
   switch (screen) {
     case 'subscriptions':
-      currentScreen = <SubscriptionsScreen items={subscriptions} onBack={() => navigate('overview')} onAdd={() => navigate('form')} onEdit={edit} onDelete={remove} />;
+      currentScreen = <SubscriptionsScreen items={subscriptions} onBack={() => navigate('overview')} onAdd={() => openNewForm('subscription', 'subscriptions')} onEdit={(item) => edit(item, 'subscriptions')} onDelete={remove} />;
       break;
     case 'calendar':
       currentScreen = <CalendarScreen items={subscriptions} onBack={() => navigate('overview')} />;
@@ -233,23 +246,31 @@ function SubTrackApp() {
       currentScreen = <CategoriesScreen items={subscriptions} onBack={() => navigate('overview')} />;
       break;
     case 'trials':
-      currentScreen = <TrialsScreen items={subscriptions} onBack={() => navigate('overview')} onAdd={() => navigate('form')} onEdit={edit} />;
+      currentScreen = <TrialsScreen items={subscriptions} onBack={() => navigate('overview')} onAdd={() => openNewForm('trial', 'trials')} onEdit={(item) => edit(item, 'trials')} />;
       break;
     case 'form':
       currentScreen = (
         <SubscriptionForm
           initial={editing}
+          startAsTrial={formPreset === 'trial'}
           onBack={() => {
-            const destination = editing ? 'subscriptions' : 'overview';
             setEditing(null);
-            navigate(destination);
+            navigate(formReturnScreen);
           }}
           onSave={save}
         />
       );
       break;
     default:
-      currentScreen = <Overview items={subscriptions} loaded={loaded} onNavigate={navigate} />;
+      currentScreen = (
+        <Overview
+          items={subscriptions}
+          loaded={loaded}
+          onNavigate={navigate}
+          onAddSubscription={() => openNewForm('subscription', 'overview')}
+          onAddTrial={() => openNewForm('trial', 'overview')}
+        />
+      );
   }
 
   return (
@@ -277,7 +298,7 @@ function SubTrackApp() {
   );
 }
 
-function Overview({ items, loaded, onNavigate }: { items: Subscription[]; loaded: boolean; onNavigate: (screen: ScreenName) => void }) {
+function Overview({ items, loaded, onNavigate, onAddSubscription, onAddTrial }: { items: Subscription[]; loaded: boolean; onNavigate: (screen: ScreenName) => void; onAddSubscription: () => void; onAddTrial: () => void }) {
   const monthly = totalMonthly(items);
   const next = items.find((item) => daysUntil(item.nextBillingDate) >= 0) ?? items[0];
   const trialCount = items.filter((item) => item.isTrial).length;
@@ -324,14 +345,16 @@ function Overview({ items, loaded, onNavigate }: { items: Subscription[]; loaded
                 borderColor: `${item.color}E8`,
               },
             ]}
-            onPress={() => onNavigate(item.screen)}
+            onPress={() => {
+              if (item.screen === 'form') return onAddSubscription();
+              if (item.screen === 'trials' && trialCount === 0) return onAddTrial();
+              onNavigate(item.screen);
+            }}
             accessibilityLabel={`${item.title}. ${item.caption}`}
           >
-            <View style={styles.menuIcon}>
-              <MaterialCommunityIcons name={item.icon} size={27} color={colors.ink} />
-            </View>
-            <Text style={styles.menuTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} maxFontSizeMultiplier={1.1}>{item.title}</Text>
-            <Text style={styles.menuCaption} numberOfLines={2} maxFontSizeMultiplier={1.1}>{item.caption}</Text>
+            <MaterialCommunityIcons name={item.icon} size={31} color={colors.ink} style={styles.menuIcon} />
+            <Text style={styles.menuTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} maxFontSizeMultiplier={1.05}>{item.title}</Text>
+            <Text style={styles.menuCaption} numberOfLines={2} maxFontSizeMultiplier={1.05}>{item.caption}</Text>
           </PressableScale>
         ))}
       </View>
@@ -551,6 +574,7 @@ function TrialsScreen({ items, onBack, onAdd, onEdit }: { items: Subscription[];
     <View style={styles.fullScreen}>
       <ScreenHeader title="Free trials" subtitle="Know before the first charge" onBack={onBack} />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
+        <PrimaryButton label="Add a free trial" icon="plus" onPress={onAdd} />
         {trials.length ? trials.map((item) => {
           const endDate = item.trialEndDate ?? item.nextBillingDate;
           return (
@@ -570,7 +594,6 @@ function TrialsScreen({ items, onBack, onAdd, onEdit }: { items: Subscription[];
         }) : (
           <>
             <EmptyState icon="timer-sand-empty" title="No trials to watch" caption="Mark a subscription as a free trial and its end date will appear here." />
-            <PrimaryButton label="Add a free trial" icon="plus" onPress={onAdd} />
           </>
         )}
       </ScrollView>
@@ -578,23 +601,28 @@ function TrialsScreen({ items, onBack, onAdd, onEdit }: { items: Subscription[];
   );
 }
 
-function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription | null; onBack: () => void; onSave: (draft: SubscriptionDraft) => Promise<void> }) {
+function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: Subscription | null; startAsTrial: boolean; onBack: () => void; onSave: (draft: SubscriptionDraft) => Promise<void> }) {
   const defaultDate = useMemo(() => {
     return toLocalISODate(addBillingCycleDate(new Date(), 'monthly'));
+  }, []);
+  const defaultTrialDate = useMemo(() => {
+    const date = new Date();
+    date.setDate(date.getDate() + 7);
+    return toLocalISODate(date);
   }, []);
   const [name, setName] = useState(initial?.name ?? '');
   const [price, setPrice] = useState(initial ? String(initial.price) : '');
   const [category, setCategory] = useState<CategoryName>(initial?.category ?? 'Entertainment');
   const [cycle, setCycle] = useState<BillingCycle>(initial?.billingCycle ?? 'monthly');
-  const [billingDate, setBillingDate] = useState(initial?.nextBillingDate ?? defaultDate);
-  const [isTrial, setIsTrial] = useState(initial?.isTrial ?? false);
-  const [trialEndDate, setTrialEndDate] = useState(initial?.trialEndDate ?? defaultDate);
+  const [billingDate, setBillingDate] = useState(initial?.nextBillingDate ?? (startAsTrial ? defaultTrialDate : defaultDate));
+  const [isTrial, setIsTrial] = useState(initial?.isTrial ?? startAsTrial);
+  const [trialEndDate, setTrialEndDate] = useState(initial?.trialEndDate ?? defaultTrialDate);
   const [reminderDays, setReminderDays] = useState(initial?.reminderDays ?? 3);
   const [notificationsEnabled, setNotificationsEnabled] = useState(initial?.notificationsEnabled ?? true);
   const [saving, setSaving] = useState(false);
   const [showBillingPicker, setShowBillingPicker] = useState(false);
   const [showTrialPicker, setShowTrialPicker] = useState(false);
-  const [selectedTrialDays, setSelectedTrialDays] = useState<number | null>(null);
+  const [selectedTrialDays, setSelectedTrialDays] = useState<number | null>(!initial && startAsTrial ? 7 : null);
 
   const chooseBillingCycle = (selectedCycle: BillingCycle) => {
     setCycle(selectedCycle);
@@ -606,7 +634,9 @@ function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription |
   const chooseTrialDuration = (days: number) => {
     const endDate = new Date();
     endDate.setDate(endDate.getDate() + days);
-    setTrialEndDate(toLocalISODate(endDate));
+    const date = toLocalISODate(endDate);
+    setTrialEndDate(date);
+    setBillingDate(date);
     setSelectedTrialDays(days);
   };
 
@@ -624,6 +654,7 @@ function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription |
     setShowTrialPicker(false);
     if (event.type === 'set' && date) {
       setTrialEndDate(toLocalISODate(date));
+      setBillingDate(toLocalISODate(date));
       setSelectedTrialDays(null);
     }
   };
@@ -647,7 +678,7 @@ function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription |
 
   return (
     <View style={styles.fullScreen}>
-      <ScreenHeader title={initial ? 'Edit subscription' : 'New subscription'} subtitle="Stored privately on this device" onBack={onBack} />
+      <ScreenHeader title={initial ? (initial.isTrial ? 'Edit free trial' : 'Edit subscription') : (startAsTrial ? 'New free trial' : 'New subscription')} subtitle="Stored privately on this device" onBack={onBack} />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flexOne}>
         <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.formContent}>
           <FieldLabel icon="text-short" label="Subscription name" />
@@ -751,7 +782,7 @@ function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription |
               </View>
             </>
           )}
-          <PrimaryButton label={saving ? 'Saving…' : initial ? 'Save changes' : 'Start tracking'} icon={saving ? 'timer-sand' : 'check'} onPress={() => void submit()} disabled={saving} />
+          <PrimaryButton label={saving ? 'Saving…' : initial ? 'Save changes' : startAsTrial ? 'Track free trial' : 'Start tracking'} icon={saving ? 'timer-sand' : 'check'} onPress={() => void submit()} disabled={saving} />
           <Text style={styles.formFooter}>No account required · Local database only</Text>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -816,9 +847,9 @@ const styles = StyleSheet.create({
   sectionCaption: { color: colors.muted, fontSize: 13, marginTop: 2 },
   menuGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 },
   menuCardSlot: { width: '48%', maxWidth: 190, aspectRatio: 1 },
-  menuCard: { flex: 1, borderRadius: 23, padding: 15, justifyContent: 'center', borderWidth: 1, overflow: 'hidden', ...shadows.card },
-  menuIcon: { width: 45, height: 45, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 11, backgroundColor: '#FFFFFF70' },
-  menuTitle: { color: colors.ink, fontSize: 15, lineHeight: 19, fontWeight: '800', letterSpacing: -0.2 }, menuCaption: { color: '#535866', fontSize: 11, lineHeight: 14, marginTop: 3 },
+  menuCard: { flex: 1, borderRadius: 23, padding: 16, alignItems: 'flex-start', justifyContent: 'flex-start', borderWidth: 1, overflow: 'hidden', ...shadows.card },
+  menuIcon: { marginBottom: 17 },
+  menuTitle: { color: colors.ink, fontSize: 17, lineHeight: 21, fontWeight: '800', letterSpacing: -0.25 }, menuCaption: { color: '#535866', fontSize: 12.5, lineHeight: 16, marginTop: 4 },
   nextCard: { flexDirection: 'row', alignItems: 'center', marginTop: 18, padding: 17, borderRadius: 21, backgroundColor: `${colors.surface}E6`, borderWidth: 1, borderColor: '#FFFFFFD5' },
   nextIcon: { width: 45, height: 45, borderRadius: 15, backgroundColor: `${colors.slate}1C`, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   nextLabel: { color: colors.rose, fontSize: 9.5, letterSpacing: 1, fontWeight: '800' }, nextTitle: { color: colors.ink, fontSize: 15, fontWeight: '800', marginTop: 2 },

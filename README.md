@@ -19,6 +19,7 @@ Scan the QR code with Expo Go, or run `npm.cmd run android` with an Android emul
 - Renewal calendar, category breakdown, and analytics
 - Free-trial tracking
 - One-tap 1-, 3-, and 7-day trial presets with native calendar pickers
+- Dedicated free-trial creation flow with a seven-day preset and matching first billing date
 - Local Android renewal notifications scheduled across upcoming billing cycles
 - Animated launch, screen transitions, press feedback, and haptics
 

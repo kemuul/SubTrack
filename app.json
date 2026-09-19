@@ -2,7 +2,7 @@
   "expo": {
     "name": "SubTrack",
     "slug": "subtrack",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -11,7 +11,7 @@
     },
     "android": {
       "package": "com.subtrack.app",
-      "versionCode": 3,
+      "versionCode": 4,
       "permissions": [
         "POST_NOTIFICATIONS",
         "SCHEDULE_EXACT_ALARM"
