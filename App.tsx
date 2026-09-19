@@ -10,6 +10,7 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -19,6 +20,7 @@ import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
+import Storage from 'expo-sqlite/kv-store';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { PressableScale } from './src/components/PressableScale';
@@ -66,6 +68,45 @@ const cycleLabels: Record<BillingCycle, string> = {
   yearly: 'Yearly',
 };
 
+const ONBOARDING_COMPLETE_KEY = 'subtrack.onboarding.complete';
+
+const onboardingSlides: {
+  title: string;
+  caption: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  color: string;
+  accent: string;
+}[] = [
+  {
+    title: 'All your subscriptions, together',
+    caption: 'Keep every service, price, and renewal date in one calm, organized place.',
+    icon: 'credit-card-multiple-outline',
+    color: colors.rose,
+    accent: colors.peach,
+  },
+  {
+    title: 'Know what you spend',
+    caption: 'See your monthly estimate and understand where your subscription budget goes.',
+    icon: 'chart-donut',
+    color: colors.slate,
+    accent: colors.apricot,
+  },
+  {
+    title: 'Stay ahead of free trials',
+    caption: 'Track trial end dates and get a reminder before the first paid billing date.',
+    icon: 'timer-sand',
+    color: '#A9BFA8',
+    accent: colors.rose,
+  },
+  {
+    title: 'Simple, private, and ready',
+    caption: 'Your subscription data stays on this device, ready whenever you need it.',
+    icon: 'shield-check-outline',
+    color: colors.peach,
+    accent: colors.slate,
+  },
+];
+
 const menuItems: {
   screen: Exclude<ScreenName, 'overview'>;
   title: string;
@@ -99,7 +140,7 @@ function SubTrackApp() {
   const [formPreset, setFormPreset] = useState<'subscription' | 'trial'>('subscription');
   const [formReturnScreen, setFormReturnScreen] = useState<ScreenName>('overview');
   const [loaded, setLoaded] = useState(false);
-  const [showLaunch, setShowLaunch] = useState(true);
+  const [appStage, setAppStage] = useState<'intro' | 'onboarding' | 'dashboard'>('intro');
   const screenOpacity = useRef(new Animated.Value(1)).current;
   const screenY = useRef(new Animated.Value(0)).current;
   const launchOpacity = useRef(new Animated.Value(1)).current;
@@ -118,20 +159,37 @@ function SubTrackApp() {
   useEffect(() => {
     void load();
     void prepareNotifications().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const onboardingStatus = Storage.getItem(ONBOARDING_COMPLETE_KEY).catch(() => null);
+
     Animated.spring(launchScale, {
       toValue: 1,
       useNativeDriver: true,
       speed: 9,
       bounciness: 9,
     }).start();
-    const timer = setTimeout(() => {
+
+    const timer = setTimeout(async () => {
+      const hasCompletedOnboarding = (await onboardingStatus) === 'true';
+      if (!active) return;
       Animated.timing(launchOpacity, {
         toValue: 0,
         duration: 420,
         useNativeDriver: true,
-      }).start(() => setShowLaunch(false));
+      }).start(({ finished }) => {
+        if (finished && active) {
+          setAppStage(hasCompletedOnboarding ? 'dashboard' : 'onboarding');
+        }
+      });
     }, 1_050);
-    return () => clearTimeout(timer);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -145,6 +203,7 @@ function SubTrackApp() {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (appStage !== 'dashboard') return true;
       if (screen === 'overview') return false;
       const destination = screen === 'form' ? formReturnScreen : 'overview';
       setEditing(null);
@@ -152,7 +211,15 @@ function SubTrackApp() {
       return true;
     });
     return () => subscription.remove();
-  }, [screen, formReturnScreen]);
+  }, [appStage, screen, formReturnScreen]);
+
+  const completeOnboarding = async () => {
+    try {
+      await Storage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
+    } finally {
+      setAppStage('dashboard');
+    }
+  };
 
   const navigate = (next: ScreenName) => {
     setScreen(next);
@@ -278,12 +345,15 @@ function SubTrackApp() {
       <StatusBar style="dark" />
       <View style={[styles.blob, styles.blobTop]} />
       <View style={[styles.blob, styles.blobBottom]} />
-      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-        <Animated.View style={[styles.screen, { opacity: screenOpacity, transform: [{ translateY: screenY }] }]}>
-          {currentScreen}
-        </Animated.View>
-      </SafeAreaView>
-      {showLaunch && (
+      {appStage === 'dashboard' && (
+        <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+          <Animated.View style={[styles.screen, { opacity: screenOpacity, transform: [{ translateY: screenY }] }]}>
+            {currentScreen}
+          </Animated.View>
+        </SafeAreaView>
+      )}
+      {appStage === 'onboarding' && <Onboarding onComplete={completeOnboarding} />}
+      {appStage === 'intro' && (
         <Animated.View style={[styles.launch, { opacity: launchOpacity }]}>
           <Animated.View style={[styles.launchInner, { transform: [{ scale: launchScale }] }]}>
             <LinearGradient colors={[colors.rose, colors.peach]} style={styles.launchIcon}>
@@ -294,6 +364,137 @@ function SubTrackApp() {
           </Animated.View>
         </Animated.View>
       )}
+    </View>
+  );
+}
+
+function Onboarding({ onComplete }: { onComplete: () => Promise<void> }) {
+  const { width, height } = useWindowDimensions();
+  const scrollRef = useRef<ScrollView>(null);
+  const [activeSlide, setActiveSlide] = useState(0);
+  const lastSlide = activeSlide === onboardingSlides.length - 1;
+  const compact = height < 700;
+  const circleSize = Math.min(218, Math.max(158, height * 0.29));
+
+  const advance = () => {
+    if (lastSlide) {
+      void onComplete();
+      return;
+    }
+    const nextSlide = activeSlide + 1;
+    setActiveSlide(nextSlide);
+    scrollRef.current?.scrollTo({ x: width * nextSlide, animated: true });
+  };
+
+  return (
+    <SafeAreaView style={styles.onboarding} edges={['top', 'bottom', 'left', 'right']}>
+      <View style={styles.onboardingBrand}>
+        <MaterialCommunityIcons name="credit-card-clock-outline" size={26} color={colors.rose} />
+        <Text style={styles.onboardingBrandText}>SubTrack</Text>
+      </View>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        bounces={false}
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={(event) => {
+          const nextSlide = Math.round(event.nativeEvent.contentOffset.x / width);
+          setActiveSlide(Math.max(0, Math.min(nextSlide, onboardingSlides.length - 1)));
+        }}
+        style={styles.onboardingScroll}
+      >
+        {onboardingSlides.map((slide, index) => (
+          <OnboardingSlide
+            key={slide.title}
+            {...slide}
+            active={activeSlide === index}
+            width={width}
+            compact={compact}
+            circleSize={circleSize}
+            position={index + 1}
+          />
+        ))}
+      </ScrollView>
+      <View style={styles.onboardingFooter}>
+        <View accessible style={styles.slideDots} accessibilityLabel={`Slide ${activeSlide + 1} of ${onboardingSlides.length}`}>
+          {onboardingSlides.map((slide, index) => (
+            <View
+              key={slide.title}
+              style={[styles.slideDot, activeSlide === index && styles.slideDotActive]}
+            />
+          ))}
+        </View>
+        <PressableScale
+          containerStyle={styles.onboardingButtonSlot}
+          style={styles.onboardingButton}
+          onPress={advance}
+          accessibilityLabel={lastSlide ? 'Get started with SubTrack' : `Continue to slide ${activeSlide + 2}`}
+        >
+          <LinearGradient colors={[colors.rose, colors.peach]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.onboardingButtonGradient}>
+            <Text style={styles.onboardingButtonText}>{lastSlide ? 'Get Started' : 'Next'}</Text>
+            <MaterialCommunityIcons name={lastSlide ? 'check' : 'arrow-right'} size={21} color={colors.white} />
+          </LinearGradient>
+        </PressableScale>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+function OnboardingSlide({
+  title,
+  caption,
+  icon,
+  color,
+  accent,
+  active,
+  width,
+  compact,
+  circleSize,
+  position,
+}: (typeof onboardingSlides)[number] & { active: boolean; width: number; compact: boolean; circleSize: number; position: number }) {
+  const reveal = useRef(new Animated.Value(active ? 1 : 0.84)).current;
+
+  useEffect(() => {
+    Animated.spring(reveal, {
+      toValue: active ? 1 : 0.84,
+      useNativeDriver: true,
+      speed: 14,
+      bounciness: 6,
+    }).start();
+  }, [active]);
+
+  return (
+    <View style={[styles.onboardingSlide, compact && styles.onboardingSlideCompact, { width }]}>
+      <Text style={[styles.slideCount, compact && styles.slideCountCompact]}>0{position}</Text>
+      <Animated.View
+        style={[
+          styles.slideCircle,
+          {
+            width: circleSize,
+            height: circleSize,
+            borderRadius: circleSize / 2,
+            backgroundColor: color,
+            opacity: reveal,
+            transform: [{ scale: reveal }],
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.slideOrbit,
+            {
+              width: circleSize * 0.83,
+              height: circleSize * 0.83,
+              borderRadius: circleSize * 0.415,
+              borderColor: accent,
+            },
+          ]}
+        />
+        <MaterialCommunityIcons name={icon} size={compact ? 62 : 76} color={colors.white} />
+      </Animated.View>
+      <Text style={[styles.slideTitle, compact && styles.slideTitleCompact]}>{title}</Text>
+      <Text style={[styles.slideCaption, compact && styles.slideCaptionCompact]}>{caption}</Text>
     </View>
   );
 }
@@ -337,14 +538,13 @@ function Overview({ items, loaded, onNavigate, onAddSubscription, onAddTrial }: 
         {menuItems.map((item) => (
           <PressableScale
             key={item.screen}
-            containerStyle={styles.menuCardSlot}
-            style={[
+            containerStyle={[
               styles.menuCard,
               {
-                backgroundColor: `${item.color}B8`,
-                borderColor: `${item.color}E8`,
+                backgroundColor: item.color,
               },
             ]}
+            style={styles.menuCardContent}
             onPress={() => {
               if (item.screen === 'form') return onAddSubscription();
               if (item.screen === 'trials' && trialCount === 0) return onAddTrial();
@@ -353,8 +553,8 @@ function Overview({ items, loaded, onNavigate, onAddSubscription, onAddTrial }: 
             accessibilityLabel={`${item.title}. ${item.caption}`}
           >
             <MaterialCommunityIcons name={item.icon} size={31} color={colors.ink} style={styles.menuIcon} />
-            <Text style={styles.menuTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} maxFontSizeMultiplier={1.05}>{item.title}</Text>
-            <Text style={styles.menuCaption} numberOfLines={2} maxFontSizeMultiplier={1.05}>{item.caption}</Text>
+            <Text style={styles.menuTitle} numberOfLines={2} maxFontSizeMultiplier={1.05}>{item.title}</Text>
+            <Text style={styles.menuCaption} numberOfLines={1} maxFontSizeMultiplier={1.05}>{item.caption}</Text>
           </PressableScale>
         ))}
       </View>
@@ -845,11 +1045,11 @@ const styles = StyleSheet.create({
   heroDivider: { width: 1, height: 34, backgroundColor: '#FFFFFF50', marginHorizontal: 22 },
   sectionHeadingRow: { marginTop: 28, marginBottom: 14 }, sectionTitle: { fontSize: 21, fontWeight: '800', color: colors.ink, letterSpacing: -0.3 },
   sectionCaption: { color: colors.muted, fontSize: 13, marginTop: 2 },
-  menuGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 },
-  menuCardSlot: { width: '48%', maxWidth: 190, aspectRatio: 1 },
-  menuCard: { flex: 1, borderRadius: 23, padding: 16, alignItems: 'flex-start', justifyContent: 'flex-start', borderWidth: 1, overflow: 'hidden', ...shadows.card },
-  menuIcon: { marginBottom: 17 },
-  menuTitle: { color: colors.ink, fontSize: 17, lineHeight: 21, fontWeight: '800', letterSpacing: -0.25 }, menuCaption: { color: '#535866', fontSize: 12.5, lineHeight: 16, marginTop: 4 },
+  menuGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 10 },
+  menuCard: { width: '48%', maxWidth: 190, aspectRatio: 1, borderRadius: 23, ...shadows.card },
+  menuCardContent: { flex: 1, padding: 12, alignItems: 'flex-start', justifyContent: 'flex-start' },
+  menuIcon: { alignSelf: 'flex-start', marginBottom: 10 },
+  menuTitle: { color: colors.ink, fontSize: 18, lineHeight: 22, fontWeight: '900', letterSpacing: -0.3 }, menuCaption: { color: '#474C59', fontSize: 13, lineHeight: 17, marginTop: 3, fontWeight: '500' },
   nextCard: { flexDirection: 'row', alignItems: 'center', marginTop: 18, padding: 17, borderRadius: 21, backgroundColor: `${colors.surface}E6`, borderWidth: 1, borderColor: '#FFFFFFD5' },
   nextIcon: { width: 45, height: 45, borderRadius: 15, backgroundColor: `${colors.slate}1C`, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   nextLabel: { color: colors.rose, fontSize: 9.5, letterSpacing: 1, fontWeight: '800' }, nextTitle: { color: colors.ink, fontSize: 15, fontWeight: '800', marginTop: 2 },
@@ -906,4 +1106,26 @@ const styles = StyleSheet.create({
   formFooter: { color: colors.muted, fontSize: 10.5, textAlign: 'center', marginTop: 8 }, launch: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 100, backgroundColor: colors.cream, alignItems: 'center', justifyContent: 'center' },
   launchInner: { alignItems: 'center' }, launchIcon: { width: 92, height: 92, borderRadius: 31, alignItems: 'center', justifyContent: 'center', marginBottom: 19, ...shadows.card },
   launchTitle: { color: colors.ink, fontSize: 34, fontWeight: '900', letterSpacing: -1 }, launchCaption: { color: colors.muted, fontSize: 13, marginTop: 5 },
+  onboarding: { flex: 1 },
+  onboardingBrand: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 24 },
+  onboardingBrandText: { color: colors.ink, fontSize: 20, fontWeight: '900', letterSpacing: -0.5 },
+  onboardingScroll: { flex: 1 },
+  onboardingSlide: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, paddingTop: 8, paddingBottom: 14 },
+  onboardingSlideCompact: { paddingTop: 0, paddingBottom: 4 },
+  slideCount: { color: colors.rose, fontSize: 12, fontWeight: '900', letterSpacing: 2.2, marginBottom: 15 },
+  slideCountCompact: { marginBottom: 8 },
+  slideCircle: { alignItems: 'center', justifyContent: 'center', marginBottom: 30, ...shadows.card },
+  slideOrbit: { position: 'absolute', borderWidth: 2, opacity: 0.58 },
+  slideTitle: { width: '100%', maxWidth: 420, color: colors.ink, fontSize: 28, lineHeight: 34, fontWeight: '900', letterSpacing: -0.7, textAlign: 'center' },
+  slideTitleCompact: { fontSize: 24, lineHeight: 29 },
+  slideCaption: { width: '100%', maxWidth: 390, color: colors.muted, fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 12, paddingHorizontal: 5 },
+  slideCaptionCompact: { fontSize: 13.5, lineHeight: 19, marginTop: 8 },
+  onboardingFooter: { width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 },
+  slideDots: { height: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 11 },
+  slideDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: `${colors.slate}55` },
+  slideDotActive: { width: 26, borderRadius: 4.5, backgroundColor: colors.rose },
+  onboardingButtonSlot: { width: '100%' },
+  onboardingButton: { width: '100%', borderRadius: 19, overflow: 'hidden', ...shadows.card },
+  onboardingButtonGradient: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 22 },
+  onboardingButtonText: { color: colors.white, fontSize: 16, fontWeight: '900' },
 });

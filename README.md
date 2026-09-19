@@ -13,6 +13,7 @@ Scan the QR code with Expo Go, or run `npm.cmd run android` with an Android emul
 ## Included
 
 - Local SQLite persistence (no account required)
+- First-launch four-slide onboarding with circular illustrations
 - Add, edit, search, and delete subscriptions
 - Weekly, monthly, quarterly, and yearly billing cycles
 - Philippine-peso summaries and annual projections
