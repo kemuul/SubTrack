@@ -57,6 +57,29 @@ export function monthlyEquivalent(price: number, cycle: BillingCycle) {
   }
 }
 
+export function addBillingCycleDate(date: Date, cycle: BillingCycle) {
+  const result = new Date(date);
+  if (cycle === 'weekly') {
+    result.setDate(result.getDate() + 7);
+    return result;
+  }
+
+  const originalDay = result.getDate();
+  result.setDate(1);
+  if (cycle === 'yearly') {
+    result.setFullYear(result.getFullYear() + 1);
+  } else {
+    result.setMonth(result.getMonth() + (cycle === 'quarterly' ? 3 : 1));
+  }
+  const lastDay = new Date(
+    result.getFullYear(),
+    result.getMonth() + 1,
+    0,
+  ).getDate();
+  result.setDate(Math.min(originalDay, lastDay));
+  return result;
+}
+
 export function totalMonthly(items: Subscription[]) {
   return items.reduce(
     (sum, item) => sum + monthlyEquivalent(item.price, item.billingCycle),

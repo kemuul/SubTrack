@@ -44,6 +44,7 @@ import type {
   SubscriptionDraft,
 } from './src/types';
 import {
+  addBillingCycleDate,
   daysUntil,
   dueLabel,
   formatMonthDay,
@@ -283,9 +284,9 @@ function Overview({ items, loaded, onNavigate }: { items: Subscription[]; loaded
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.overviewContent}>
       <View style={styles.brandRow}>
-        <View>
+        <View style={styles.brandCopy}>
           <Text style={styles.eyebrow}>{greeting()}</Text>
-          <Text style={styles.title}>Your SubTrack</Text>
+          <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} maxFontSizeMultiplier={1.1}>Your SubTrack</Text>
         </View>
         <View style={styles.brandIcon}>
           <MaterialCommunityIcons name="credit-card-clock-outline" size={25} color={colors.rose} />
@@ -315,6 +316,7 @@ function Overview({ items, loaded, onNavigate }: { items: Subscription[]; loaded
         {menuItems.map((item) => (
           <PressableScale
             key={item.screen}
+            containerStyle={styles.menuCardSlot}
             style={[
               styles.menuCard,
               {
@@ -328,8 +330,8 @@ function Overview({ items, loaded, onNavigate }: { items: Subscription[]; loaded
             <View style={styles.menuIcon}>
               <MaterialCommunityIcons name={item.icon} size={27} color={colors.ink} />
             </View>
-            <Text style={styles.menuTitle}>{item.title}</Text>
-            <Text style={styles.menuCaption}>{item.caption}</Text>
+            <Text style={styles.menuTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} maxFontSizeMultiplier={1.1}>{item.title}</Text>
+            <Text style={styles.menuCaption} numberOfLines={2} maxFontSizeMultiplier={1.1}>{item.caption}</Text>
           </PressableScale>
         ))}
       </View>
@@ -578,9 +580,7 @@ function TrialsScreen({ items, onBack, onAdd, onEdit }: { items: Subscription[];
 
 function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription | null; onBack: () => void; onSave: (draft: SubscriptionDraft) => Promise<void> }) {
   const defaultDate = useMemo(() => {
-    const date = new Date();
-    date.setDate(date.getDate() + 30);
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    return toLocalISODate(addBillingCycleDate(new Date(), 'monthly'));
   }, []);
   const [name, setName] = useState(initial?.name ?? '');
   const [price, setPrice] = useState(initial ? String(initial.price) : '');
@@ -595,6 +595,13 @@ function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription |
   const [showBillingPicker, setShowBillingPicker] = useState(false);
   const [showTrialPicker, setShowTrialPicker] = useState(false);
   const [selectedTrialDays, setSelectedTrialDays] = useState<number | null>(null);
+
+  const chooseBillingCycle = (selectedCycle: BillingCycle) => {
+    setCycle(selectedCycle);
+    setBillingDate(
+      toLocalISODate(addBillingCycleDate(new Date(), selectedCycle)),
+    );
+  };
 
   const chooseTrialDuration = (days: number) => {
     const endDate = new Date();
@@ -656,7 +663,7 @@ function SubscriptionForm({ initial, onBack, onSave }: { initial: Subscription |
           </View>
           <FieldLabel icon="repeat" label="Billing cycle" />
           <View style={styles.chipWrap}>
-            {(Object.keys(cycleLabels) as BillingCycle[]).map((item) => <ChoiceChip key={item} selected={item === cycle} label={cycleLabels[item]} onPress={() => setCycle(item)} />)}
+            {(Object.keys(cycleLabels) as BillingCycle[]).map((item) => <ChoiceChip key={item} selected={item === cycle} label={cycleLabels[item]} onPress={() => chooseBillingCycle(item)} />)}
           </View>
           <FieldLabel icon="calendar-outline" label="Next billing date" />
           <View style={styles.dateInputWrap}>
@@ -794,6 +801,7 @@ const styles = StyleSheet.create({
   blobBottom: { width: 230, height: 230, backgroundColor: colors.slate, bottom: -135, left: -110, opacity: 0.15 },
   overviewContent: { width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 18, paddingBottom: 36 },
   brandRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 },
+  brandCopy: { flex: 1, paddingRight: 14 },
   eyebrow: { color: colors.muted, fontSize: 13, fontWeight: '600', letterSpacing: 0.2 },
   title: { color: colors.ink, fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -0.8 },
   brandIcon: { width: 48, height: 48, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.white}C9`, borderWidth: 1, borderColor: `${colors.white}E0` },
@@ -807,9 +815,10 @@ const styles = StyleSheet.create({
   sectionHeadingRow: { marginTop: 28, marginBottom: 14 }, sectionTitle: { fontSize: 21, fontWeight: '800', color: colors.ink, letterSpacing: -0.3 },
   sectionCaption: { color: colors.muted, fontSize: 13, marginTop: 2 },
   menuGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 },
-  menuCard: { width: '48%', maxWidth: 190, aspectRatio: 1, borderRadius: 23, padding: 17, justifyContent: 'center', borderWidth: 1, ...shadows.card },
-  menuIcon: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 13, backgroundColor: '#FFFFFF70' },
-  menuTitle: { color: colors.ink, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 }, menuCaption: { color: '#535866', fontSize: 11.5, lineHeight: 16, marginTop: 3 },
+  menuCardSlot: { width: '48%', maxWidth: 190, aspectRatio: 1 },
+  menuCard: { flex: 1, borderRadius: 23, padding: 15, justifyContent: 'center', borderWidth: 1, overflow: 'hidden', ...shadows.card },
+  menuIcon: { width: 45, height: 45, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 11, backgroundColor: '#FFFFFF70' },
+  menuTitle: { color: colors.ink, fontSize: 15, lineHeight: 19, fontWeight: '800', letterSpacing: -0.2 }, menuCaption: { color: '#535866', fontSize: 11, lineHeight: 14, marginTop: 3 },
   nextCard: { flexDirection: 'row', alignItems: 'center', marginTop: 18, padding: 17, borderRadius: 21, backgroundColor: `${colors.surface}E6`, borderWidth: 1, borderColor: '#FFFFFFD5' },
   nextIcon: { width: 45, height: 45, borderRadius: 15, backgroundColor: `${colors.slate}1C`, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   nextLabel: { color: colors.rose, fontSize: 9.5, letterSpacing: 1, fontWeight: '800' }, nextTitle: { color: colors.ink, fontSize: 15, fontWeight: '800', marginTop: 2 },

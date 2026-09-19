@@ -1,7 +1,12 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import type { Subscription } from './types';
-import { formatShortDate, parseLocalDate, peso } from './utils';
+import {
+  addBillingCycleDate,
+  formatShortDate,
+  parseLocalDate,
+  peso,
+} from './utils';
 
 const CHANNEL_ID = 'renewal-reminders';
 
@@ -103,32 +108,9 @@ function buildRecurringDates(
   let current = parseLocalDate(firstDate);
   for (let index = 0; index < 12; index += 1) {
     dates.push(toLocalISO(current));
-    current = addCycle(current, cycle);
+    current = addBillingCycleDate(current, cycle);
   }
   return dates;
-}
-
-function addCycle(date: Date, cycle: Subscription['billingCycle']) {
-  const result = new Date(date);
-  if (cycle === 'weekly') {
-    result.setDate(result.getDate() + 7);
-    return result;
-  }
-
-  const originalDay = result.getDate();
-  result.setDate(1);
-  if (cycle === 'yearly') {
-    result.setFullYear(result.getFullYear() + 1);
-  } else {
-    result.setMonth(result.getMonth() + (cycle === 'quarterly' ? 3 : 1));
-  }
-  const finalDay = new Date(
-    result.getFullYear(),
-    result.getMonth() + 1,
-    0,
-  ).getDate();
-  result.setDate(Math.min(originalDay, finalDay));
-  return result;
 }
 
 function toLocalISO(date: Date) {

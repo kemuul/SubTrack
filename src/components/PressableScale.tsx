@@ -12,6 +12,7 @@ type Props = {
   children: ReactNode;
   onPress?: () => void;
   style?: StyleProp<ViewStyle>;
+  containerStyle?: StyleProp<ViewStyle>;
   disabled?: boolean;
   accessibilityLabel?: string;
   accessibilityRole?: AccessibilityRole;
@@ -22,6 +23,7 @@ export function PressableScale({
   children,
   onPress,
   style,
+  containerStyle,
   disabled = false,
   accessibilityLabel,
   accessibilityRole = 'button',
@@ -40,6 +42,7 @@ export function PressableScale({
 
   return (
     <Pressable
+      style={containerStyle}
       accessibilityLabel={accessibilityLabel}
       accessibilityRole={accessibilityRole}
       disabled={disabled}
