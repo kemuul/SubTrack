@@ -3,6 +3,7 @@ import {
   Alert,
   Animated,
   BackHandler,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -15,7 +16,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
@@ -24,6 +25,12 @@ import Storage from 'expo-sqlite/kv-store';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { PressableScale } from './src/components/PressableScale';
+import { AuthScreen } from './src/components/AuthScreen';
+import {
+  readAuthSnapshot,
+  signOutLocalAccount,
+  type AuthUser,
+} from './src/auth';
 import {
   createSubscription,
   deleteSubscription,
@@ -69,6 +76,8 @@ const cycleLabels: Record<BillingCycle, string> = {
 };
 
 const ONBOARDING_COMPLETE_KEY = 'subtrack.onboarding.complete';
+
+type AppStage = 'intro' | 'onboarding' | 'auth' | 'welcome' | 'dashboard';
 
 const onboardingSlides: {
   title: string;
@@ -140,7 +149,9 @@ function SubTrackApp() {
   const [formPreset, setFormPreset] = useState<'subscription' | 'trial'>('subscription');
   const [formReturnScreen, setFormReturnScreen] = useState<ScreenName>('overview');
   const [loaded, setLoaded] = useState(false);
-  const [appStage, setAppStage] = useState<'intro' | 'onboarding' | 'dashboard'>('intro');
+  const [appStage, setAppStage] = useState<AppStage>('intro');
+  const [registeredUser, setRegisteredUser] = useState<AuthUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const screenOpacity = useRef(new Animated.Value(1)).current;
   const screenY = useRef(new Animated.Value(0)).current;
   const launchOpacity = useRef(new Animated.Value(1)).current;
@@ -164,6 +175,10 @@ function SubTrackApp() {
   useEffect(() => {
     let active = true;
     const onboardingStatus = Storage.getItem(ONBOARDING_COMPLETE_KEY).catch(() => null);
+    const authStatus = readAuthSnapshot().catch(() => ({
+      registeredUser: null,
+      signedInUser: null,
+    }));
 
     Animated.spring(launchScale, {
       toValue: 1,
@@ -173,15 +188,22 @@ function SubTrackApp() {
     }).start();
 
     const timer = setTimeout(async () => {
-      const hasCompletedOnboarding = (await onboardingStatus) === 'true';
+      const [storedOnboarding, auth] = await Promise.all([onboardingStatus, authStatus]);
       if (!active) return;
+      const hasCompletedOnboarding = storedOnboarding === 'true';
+      setRegisteredUser(auth.registeredUser);
+      setCurrentUser(auth.signedInUser);
       Animated.timing(launchOpacity, {
         toValue: 0,
         duration: 420,
         useNativeDriver: true,
       }).start(({ finished }) => {
         if (finished && active) {
-          setAppStage(hasCompletedOnboarding ? 'dashboard' : 'onboarding');
+          if (!hasCompletedOnboarding) {
+            setAppStage('onboarding');
+          } else {
+            setAppStage(auth.signedInUser ? 'welcome' : 'auth');
+          }
         }
       });
     }, 1_050);
@@ -203,7 +225,8 @@ function SubTrackApp() {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (appStage !== 'dashboard') return true;
+      if (appStage === 'onboarding' || appStage === 'welcome') return true;
+      if (appStage !== 'dashboard') return false;
       if (screen === 'overview') return false;
       const destination = screen === 'form' ? formReturnScreen : 'overview';
       setEditing(null);
@@ -217,8 +240,43 @@ function SubTrackApp() {
     try {
       await Storage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
     } finally {
-      setAppStage('dashboard');
+      setAppStage(currentUser ? 'welcome' : 'auth');
     }
+  };
+
+  const authenticate = (user: AuthUser) => {
+    setRegisteredUser(user);
+    setCurrentUser(user);
+    setScreen('overview');
+    setAppStage('dashboard');
+  };
+
+  const requestSignOut = () => {
+    if (!currentUser) return;
+    Alert.alert(
+      currentUser.displayName,
+      currentUser.email,
+      [
+        { text: 'Stay signed in', style: 'cancel' },
+        {
+          text: 'Sign out',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await signOutLocalAccount();
+                setEditing(null);
+                setCurrentUser(null);
+                setScreen('overview');
+                setAppStage('auth');
+              } catch {
+                Alert.alert('Could not sign out', 'Please close the app and try again.');
+              }
+            })();
+          },
+        },
+      ],
+    );
   };
 
   const navigate = (next: ScreenName) => {
@@ -333,9 +391,11 @@ function SubTrackApp() {
         <Overview
           items={subscriptions}
           loaded={loaded}
+          user={currentUser}
           onNavigate={navigate}
           onAddSubscription={() => openNewForm('subscription', 'overview')}
           onAddTrial={() => openNewForm('trial', 'overview')}
+          onAccountPress={requestSignOut}
         />
       );
   }
@@ -353,13 +413,21 @@ function SubTrackApp() {
         </SafeAreaView>
       )}
       {appStage === 'onboarding' && <Onboarding onComplete={completeOnboarding} />}
+      {appStage === 'auth' && (
+        <AuthScreen registeredUser={registeredUser} onAuthenticated={authenticate} />
+      )}
+      {appStage === 'welcome' && currentUser && (
+        <WelcomeBack user={currentUser} onDone={() => setAppStage('dashboard')} />
+      )}
       {appStage === 'intro' && (
         <Animated.View style={[styles.launch, { opacity: launchOpacity }]}>
           <Animated.View style={[styles.launchInner, { transform: [{ scale: launchScale }] }]}>
-            <LinearGradient colors={[colors.rose, colors.peach]} style={styles.launchIcon}>
-              <MaterialCommunityIcons name="credit-card-clock-outline" size={46} color={colors.white} />
-            </LinearGradient>
-            <Text style={styles.launchTitle}>SubTrack</Text>
+            <Image
+              accessibilityLabel="SubTracker logo"
+              resizeMode="contain"
+              source={require('./assets/subtrack-logo.png')}
+              style={styles.launchLogo}
+            />
             <Text style={styles.launchCaption}>Keep every renewal in sight.</Text>
           </Animated.View>
         </Animated.View>
@@ -499,20 +567,53 @@ function OnboardingSlide({
   );
 }
 
-function Overview({ items, loaded, onNavigate, onAddSubscription, onAddTrial }: { items: Subscription[]; loaded: boolean; onNavigate: (screen: ScreenName) => void; onAddSubscription: () => void; onAddTrial: () => void }) {
+function WelcomeBack({ user, onDone }: { user: AuthUser; onDone: () => void }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(0.9)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 300, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, speed: 12, bounciness: 7, useNativeDriver: true }),
+    ]).start();
+    const timer = setTimeout(() => {
+      Animated.timing(opacity, { toValue: 0, duration: 280, useNativeDriver: true })
+        .start(({ finished }) => {
+          if (finished) onDone();
+        });
+    }, 1_250);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <SafeAreaView style={styles.welcomeBack} edges={['top', 'bottom', 'left', 'right']}>
+      <Animated.View style={[styles.welcomeBackInner, { opacity, transform: [{ scale }] }] }>
+        <View style={styles.welcomeAvatar}>
+          <MaterialCommunityIcons name="account-check-outline" size={49} color={colors.white} />
+        </View>
+        <Text style={styles.welcomeEyebrow}>SIGNED IN SECURELY</Text>
+        <Text style={styles.welcomeTitle}>Welcome back, {user.displayName.split(' ')[0]}</Text>
+        <Text style={styles.welcomeCaption}>Your subscriptions are ready.</Text>
+      </Animated.View>
+    </SafeAreaView>
+  );
+}
+
+function Overview({ items, loaded, user, onNavigate, onAddSubscription, onAddTrial, onAccountPress }: { items: Subscription[]; loaded: boolean; user: AuthUser | null; onNavigate: (screen: ScreenName) => void; onAddSubscription: () => void; onAddTrial: () => void; onAccountPress: () => void }) {
   const monthly = totalMonthly(items);
   const next = items.find((item) => daysUntil(item.nextBillingDate) >= 0) ?? items[0];
   const trialCount = items.filter((item) => item.isTrial).length;
+  const firstName = user?.displayName.split(' ')[0];
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.overviewContent}>
       <View style={styles.brandRow}>
         <View style={styles.brandCopy}>
-          <Text style={styles.eyebrow}>{greeting()}</Text>
+          <Text style={styles.eyebrow}>{greeting()}{firstName ? `, ${firstName}` : ''}</Text>
           <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} maxFontSizeMultiplier={1.1}>Your SubTrack</Text>
         </View>
-        <View style={styles.brandIcon}>
-          <MaterialCommunityIcons name="credit-card-clock-outline" size={25} color={colors.rose} />
-        </View>
+        <PressableScale style={styles.brandIcon} onPress={onAccountPress} accessibilityLabel="Open account options">
+          <MaterialCommunityIcons name="account-circle-outline" size={27} color={colors.rose} />
+        </PressableScale>
       </View>
       <LinearGradient colors={[colors.rose, '#D99D9E', colors.peach]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
         <View style={styles.heroGlow} />
@@ -1104,8 +1205,15 @@ const styles = StyleSheet.create({
   choiceChipText: { color: colors.muted, fontSize: 11.5, fontWeight: '700' }, toggleCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: `${colors.surface}D9`, borderRadius: 19, padding: 15, marginTop: 20, borderWidth: 1, borderColor: colors.white },
   toggleTextWrap: { flex: 1, paddingRight: 12 }, toggleTitle: { color: colors.ink, fontSize: 13.5, fontWeight: '800' }, toggleCaption: { color: colors.muted, fontSize: 10.5, lineHeight: 15, marginTop: 5 },
   formFooter: { color: colors.muted, fontSize: 10.5, textAlign: 'center', marginTop: 8 }, launch: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 100, backgroundColor: colors.cream, alignItems: 'center', justifyContent: 'center' },
-  launchInner: { alignItems: 'center' }, launchIcon: { width: 92, height: 92, borderRadius: 31, alignItems: 'center', justifyContent: 'center', marginBottom: 19, ...shadows.card },
-  launchTitle: { color: colors.ink, fontSize: 34, fontWeight: '900', letterSpacing: -1 }, launchCaption: { color: colors.muted, fontSize: 13, marginTop: 5 },
+  launchInner: { alignItems: 'center' },
+  launchLogo: { width: 264, height: 271 },
+  launchCaption: { color: colors.muted, fontSize: 13, marginTop: 14 },
+  welcomeBack: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
+  welcomeBackInner: { width: '100%', maxWidth: 440, alignItems: 'center' },
+  welcomeAvatar: { width: 112, height: 112, borderRadius: 56, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.rose, marginBottom: 24, ...shadows.card },
+  welcomeEyebrow: { color: colors.rose, fontSize: 10.5, fontWeight: '900', letterSpacing: 1.5, textAlign: 'center' },
+  welcomeTitle: { color: colors.ink, fontSize: 30, lineHeight: 36, fontWeight: '900', letterSpacing: -0.8, textAlign: 'center', marginTop: 8 },
+  welcomeCaption: { color: colors.muted, fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 7 },
   onboarding: { flex: 1 },
   onboardingBrand: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 24 },
   onboardingBrandText: { color: colors.ink, fontSize: 20, fontWeight: '900', letterSpacing: -0.5 },
