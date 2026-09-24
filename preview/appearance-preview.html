@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SubTrack v1.1.1 appearance preview</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #e9eef3; color: #192633; font-family: Arial, sans-serif; }
+    .canvas { width: 1440px; height: 1300px; margin: 0 auto; padding: 42px 70px; }
+    h1 { font-size: 38px; margin: 0 0 8px; letter-spacing: -1px; }
+    .subtitle { color: #5e6c7a; font-size: 17px; margin: 0 0 28px; }
+    .stage { display: flex; align-items: center; justify-content: center; gap: 70px; }
+    .mode { text-align: center; }
+    .mode-label { display: flex; justify-content: center; gap: 11px; align-items: center; font-size: 20px; font-weight: 700; margin: 0 0 13px; }
+    .direction { display: inline-block; color: #315b7c; background: #dce6ef; border-radius: 99px; font-size: 12px; padding: 7px 12px; }
+    .phone { width: 374px; height: 1030px; border: 7px solid #253645; border-radius: 43px; overflow: hidden; position: relative; text-align: left; box-shadow: 0 25px 50px #24354930; }
+    .phone.light { background: #fff; color: #192633; --card: #f5f7fa; --line: #dee5ec; --muted: #5e6c7a; --accent: #315b7c; --next: #fff; }
+    .phone.dark { background: #101820; color: #f4f7fa; --card: #1c2b3a; --line: #334454; --muted: #b7c3ce; --accent: #a5c7e5; --next: #1b2937; }
+    .notch { width: 103px; height: 22px; background: #253645; border-radius: 0 0 17px 17px; position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 2; }
+    .screen { padding: 51px 20px 22px; height: 100%; overflow: hidden; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 21px; }
+    .greeting { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .brand { font-size: 26px; font-weight: 800; line-height: 30px; }
+    .account { height: 42px; width: 42px; border: 1px solid var(--line); border-radius: 14px; display: grid; place-items: center; color: var(--accent); font-size: 24px; background: var(--next); }
+    .hero { background: #27445f; border-radius: 25px; padding: 24px; color: #fff; height: 163px; }
+    .dark .hero { background: #28425b; }
+    .hero small { color: #dce6ef; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+    .hero strong { display: block; font-size: 34px; margin-top: 4px; }
+    .hero-foot { display: flex; gap: 34px; margin-top: 13px; font-size: 11px; color: #dce6ef; }
+    .hero-foot b { display: block; color: #fff; font-size: 14px; margin-top: 4px; }
+    .section { margin: 24px 0 14px; }
+    .section b { font-size: 20px; }
+    .section div { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+    .tile { height: 158px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 16px; }
+    .icon { color: var(--accent); font-size: 29px; height: 69px; }
+    .tile b { display: block; font-size: 16px; line-height: 19px; }
+    .tile span { color: var(--muted); display: block; font-size: 11px; margin-top: 4px; }
+    .next { background: var(--next); border: 1px solid var(--line); border-radius: 19px; padding: 14px; margin-top: 16px; display: flex; align-items: center; gap: 11px; }
+    .next-icon { color: var(--accent); background: var(--card); border-radius: 11px; font-size: 22px; width: 41px; height: 41px; display: grid; place-items: center; }
+    .next-copy { flex: 1; font-size: 10px; color: var(--muted); }
+    .next-copy b { display: block; font-size: 14px; color: inherit; margin: 3px 0; }
+    .light .next-copy b { color: #192633; }
+    .dark .next-copy b { color: #f4f7fa; }
+    .next-price { font-size: 13px; font-weight: 800; }
+    .note { text-align: center; color: var(--muted); font-size: 10px; margin-top: 20px; }
+    .disclaimer { text-align: center; margin-top: 22px; color: #5e6c7a; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main class="canvas">
+    <h1>SubTrack appearance preview</h1>
+    <p class="subtitle">Choose your look after registration. You can change it later from the account menu.</p>
+    <section class="stage">
+      <div class="mode">
+        <p class="mode-label">Light mode <span class="direction">sweeps down from top ↓</span></p>
+        <div class="phone light"><div class="notch"></div><div class="screen">
+          <div class="header"><div><div class="greeting">Good evening, Alex</div><div class="brand">Your SubTrack</div></div><div class="account">◉</div></div>
+          <div class="hero"><small>ESTIMATED MONTHLY SPEND</small><strong>₱629.00</strong><div class="hero-foot"><div>Yearly projection<b>₱7,548.00</b></div><div>Active services<b>3</b></div></div></div>
+          <div class="section"><b>Explore</b><div>Everything you need, right here</div></div>
+          <div class="grid">
+            <div class="tile"><div class="icon">▣</div><b>Subscriptions</b><span>View and manage</span></div>
+            <div class="tile"><div class="icon">▦</div><b>Calendar</b><span>Upcoming charges</span></div>
+            <div class="tile"><div class="icon">◕</div><b>Analytics</b><span>Understand spending</span></div>
+            <div class="tile"><div class="icon">◇</div><b>Categories</b><span>See where it goes</span></div>
+            <div class="tile"><div class="icon">◷</div><b>Free trials</b><span>Cancel in time</span></div>
+            <div class="tile"><div class="icon">⊕</div><b>Add new</b><span>Track a subscription</span></div>
+          </div>
+          <div class="next"><div class="next-icon">▣</div><div class="next-copy">NEXT CHARGE<b>Netflix</b>Oct 19 · In 30 days</div><div class="next-price">₱129</div></div>
+          <div class="note">◇ Data stays on this device</div>
+        </div></div>
+      </div>
+      <div class="mode">
+        <p class="mode-label">Dark mode <span class="direction">sweeps up from bottom ↑</span></p>
+        <div class="phone dark"><div class="notch"></div><div class="screen">
+          <div class="header"><div><div class="greeting">Good evening, Alex</div><div class="brand">Your SubTrack</div></div><div class="account">◉</div></div>
+          <div class="hero"><small>ESTIMATED MONTHLY SPEND</small><strong>₱629.00</strong><div class="hero-foot"><div>Yearly projection<b>₱7,548.00</b></div><div>Active services<b>3</b></div></div></div>
+          <div class="section"><b>Explore</b><div>Everything you need, right here</div></div>
+          <div class="grid">
+            <div class="tile"><div class="icon">▣</div><b>Subscriptions</b><span>View and manage</span></div>
+            <div class="tile"><div class="icon">▦</div><b>Calendar</b><span>Upcoming charges</span></div>
+            <div class="tile"><div class="icon">◕</div><b>Analytics</b><span>Understand spending</span></div>
+            <div class="tile"><div class="icon">◇</div><b>Categories</b><span>See where it goes</span></div>
+            <div class="tile"><div class="icon">◷</div><b>Free trials</b><span>Cancel in time</span></div>
+            <div class="tile"><div class="icon">⊕</div><b>Add new</b><span>Track a subscription</span></div>
+          </div>
+          <div class="next"><div class="next-icon">▣</div><div class="next-copy">NEXT CHARGE<b>Netflix</b>Oct 19 · In 30 days</div><div class="next-price">₱129</div></div>
+          <div class="note">◇ Data stays on this device</div>
+        </div></div>
+      </div>
+    </section>
+    <p class="disclaimer">Illustrative preview based on the current palette and layout. It is not an Android device screenshot.</p>
+  </main>
+</body>
+</html>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  Appearance,
   BackHandler,
   Image,
   KeyboardAvoidingView,
@@ -15,7 +16,7 @@ import {
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { LinearGradient } from 'expo-linear-gradient';
+import * as SystemUI from 'expo-system-ui';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import DateTimePicker, {
   type DateTimePickerEvent,
@@ -44,7 +45,11 @@ import {
   prepareNotifications,
   scheduleRenewalReminder,
 } from './src/notifications';
-import { categories, categoryMeta, colors, shadows } from './src/theme';
+import {
+  categories, darkColors, getCategoryMeta, getShadows, lightColors,
+  THEME_PREFERENCE_KEY, ThemeProvider, useTheme,
+  type ThemeColors, type ThemeMode,
+} from './src/theme';
 import type {
   BillingCycle,
   CategoryName,
@@ -77,71 +82,96 @@ const cycleLabels: Record<BillingCycle, string> = {
 
 const ONBOARDING_COMPLETE_KEY = 'subtrack.onboarding.complete';
 
-type AppStage = 'intro' | 'onboarding' | 'auth' | 'welcome' | 'dashboard';
+type AppStage = 'intro' | 'onboarding' | 'auth' | 'appearance' | 'welcome' | 'dashboard';
 
-const onboardingSlides: {
+const makeOnboardingSlides = (colors: ThemeColors): {
   title: string;
   caption: string;
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
   color: string;
   accent: string;
-}[] = [
+}[] => [
   {
     title: 'All your subscriptions, together',
     caption: 'Keep every service, price, and renewal date in one calm, organized place.',
     icon: 'credit-card-multiple-outline',
-    color: colors.rose,
-    accent: colors.peach,
+    color: colors.button,
+    accent: colors.heroMuted,
   },
   {
     title: 'Know what you spend',
     caption: 'See your monthly estimate and understand where your subscription budget goes.',
     icon: 'chart-donut',
-    color: colors.slate,
-    accent: colors.apricot,
+    color: colors.button,
+    accent: colors.heroMuted,
   },
   {
     title: 'Stay ahead of free trials',
     caption: 'Track trial end dates and get a reminder before the first paid billing date.',
     icon: 'timer-sand',
-    color: '#A9BFA8',
-    accent: colors.rose,
+    color: colors.button,
+    accent: colors.heroMuted,
   },
   {
     title: 'Simple, private, and ready',
     caption: 'Your subscription data stays on this device, ready whenever you need it.',
     icon: 'shield-check-outline',
-    color: colors.peach,
-    accent: colors.slate,
+    color: colors.button,
+    accent: colors.heroMuted,
   },
 ];
 
-const menuItems: {
+const makeMenuItems = (colors: ThemeColors): {
   screen: Exclude<ScreenName, 'overview'>;
   title: string;
   caption: string;
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
   color: string;
-}[] = [
-  { screen: 'subscriptions', title: 'Subscriptions', caption: 'View and manage', icon: 'credit-card-multiple-outline', color: colors.rose },
-  { screen: 'calendar', title: 'Calendar', caption: 'Upcoming charges', icon: 'calendar-month-outline', color: colors.peach },
-  { screen: 'analytics', title: 'Analytics', caption: 'Understand spending', icon: 'chart-donut', color: colors.slate },
-  { screen: 'categories', title: 'Categories', caption: 'See where it goes', icon: 'shape-outline', color: colors.apricot },
-  { screen: 'trials', title: 'Free trials', caption: 'Cancel in time', icon: 'timer-sand', color: '#A9BFA8' },
-  { screen: 'form', title: 'Add new', caption: 'Track a subscription', icon: 'plus-circle-outline', color: '#A9A5C7' },
+}[] => [
+  { screen: 'subscriptions', title: 'Subscriptions', caption: 'View and manage', icon: 'credit-card-multiple-outline', color: colors.menu },
+  { screen: 'calendar', title: 'Calendar', caption: 'Upcoming charges', icon: 'calendar-month-outline', color: colors.menu },
+  { screen: 'analytics', title: 'Analytics', caption: 'Understand spending', icon: 'chart-donut', color: colors.menu },
+  { screen: 'categories', title: 'Categories', caption: 'See where it goes', icon: 'shape-outline', color: colors.menu },
+  { screen: 'trials', title: 'Free trials', caption: 'Cancel in time', icon: 'timer-sand', color: colors.menu },
+  { screen: 'form', title: 'Add new', caption: 'Track a subscription', icon: 'plus-circle-outline', color: colors.menu },
 ];
 
+function useAppStyles() {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme.colors, theme.shadows), [theme.colors, theme.shadows]);
+  return { ...theme, styles };
+}
+
 export default function App() {
+  const [mode, setMode] = useState<ThemeMode>(() => {
+    try {
+      return Storage.getItemSync(THEME_PREFERENCE_KEY) === 'dark' ? 'dark' : 'light';
+    } catch {
+      return 'light';
+    }
+  });
+  const theme = useMemo(() => ({
+    mode,
+    colors: mode === 'dark' ? darkColors : lightColors,
+    shadows: getShadows(mode),
+  }), [mode]);
+  useEffect(() => {
+    Appearance.setColorScheme(mode);
+    void SystemUI.setBackgroundColorAsync(theme.colors.cream).catch(() => undefined);
+  }, [mode, theme.colors.cream]);
   return (
     <SafeAreaProvider>
       <SQLiteProvider databaseName="subtrack.db" onInit={migrateDatabase}>
-        <SubTrackApp />
+        <ThemeProvider value={theme}>
+          <SubTrackApp setMode={setMode} />
+        </ThemeProvider>
       </SQLiteProvider>
     </SafeAreaProvider>
   );
 }
 
-function SubTrackApp() {
+function SubTrackApp({ setMode }: { setMode: (mode: ThemeMode) => void }) {
+  const { colors, mode, styles } = useAppStyles();
   const db = useSQLiteContext();
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [screen, setScreen] = useState<ScreenName>('overview');
@@ -152,6 +182,7 @@ function SubTrackApp() {
   const [appStage, setAppStage] = useState<AppStage>('intro');
   const [registeredUser, setRegisteredUser] = useState<AuthUser | null>(null);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [themeSelected, setThemeSelected] = useState(false);
   const screenOpacity = useRef(new Animated.Value(1)).current;
   const screenY = useRef(new Animated.Value(0)).current;
   const launchOpacity = useRef(new Animated.Value(1)).current;
@@ -175,6 +206,7 @@ function SubTrackApp() {
   useEffect(() => {
     let active = true;
     const onboardingStatus = Storage.getItem(ONBOARDING_COMPLETE_KEY).catch(() => null);
+    const savedTheme = Storage.getItem(THEME_PREFERENCE_KEY).catch(() => null);
     const authStatus = readAuthSnapshot().catch(() => ({
       registeredUser: null,
       signedInUser: null,
@@ -188,9 +220,12 @@ function SubTrackApp() {
     }).start();
 
     const timer = setTimeout(async () => {
-      const [storedOnboarding, auth] = await Promise.all([onboardingStatus, authStatus]);
+      const [storedOnboarding, auth, storedTheme] = await Promise.all([onboardingStatus, authStatus, savedTheme]);
       if (!active) return;
       const hasCompletedOnboarding = storedOnboarding === 'true';
+      const hasTheme = storedTheme === 'light' || storedTheme === 'dark';
+      if (hasTheme) setMode(storedTheme);
+      setThemeSelected(hasTheme);
       setRegisteredUser(auth.registeredUser);
       setCurrentUser(auth.signedInUser);
       Animated.timing(launchOpacity, {
@@ -202,7 +237,7 @@ function SubTrackApp() {
           if (!hasCompletedOnboarding) {
             setAppStage('onboarding');
           } else {
-            setAppStage(auth.signedInUser ? 'welcome' : 'auth');
+            setAppStage(auth.signedInUser ? (hasTheme ? 'welcome' : 'appearance') : 'auth');
           }
         }
       });
@@ -225,7 +260,7 @@ function SubTrackApp() {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (appStage === 'onboarding' || appStage === 'welcome') return true;
+      if (appStage === 'onboarding' || appStage === 'welcome' || appStage === 'appearance') return true;
       if (appStage !== 'dashboard') return false;
       if (screen === 'overview') return false;
       const destination = screen === 'form' ? formReturnScreen : 'overview';
@@ -240,14 +275,21 @@ function SubTrackApp() {
     try {
       await Storage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
     } finally {
-      setAppStage(currentUser ? 'welcome' : 'auth');
+      setAppStage(currentUser ? (themeSelected ? 'welcome' : 'appearance') : 'auth');
     }
   };
 
-  const authenticate = (user: AuthUser) => {
+  const authenticate = (user: AuthUser, isRegistration: boolean) => {
     setRegisteredUser(user);
     setCurrentUser(user);
     setScreen('overview');
+    setAppStage(isRegistration || !themeSelected ? 'appearance' : 'dashboard');
+  };
+
+  const chooseAppearance = async (choice: ThemeMode) => {
+    await Storage.setItem(THEME_PREFERENCE_KEY, choice);
+    setMode(choice);
+    setThemeSelected(true);
     setAppStage('dashboard');
   };
 
@@ -258,6 +300,9 @@ function SubTrackApp() {
       currentUser.email,
       [
         { text: 'Stay signed in', style: 'cancel' },
+        { text: 'Appearance', onPress: () => {
+          setAppStage('appearance');
+        } },
         {
           text: 'Sign out',
           style: 'destructive',
@@ -402,7 +447,7 @@ function SubTrackApp() {
 
   return (
     <View style={styles.app}>
-      <StatusBar style="dark" />
+      <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
       <View style={[styles.blob, styles.blobTop]} />
       <View style={[styles.blob, styles.blobBottom]} />
       {appStage === 'dashboard' && (
@@ -416,18 +461,27 @@ function SubTrackApp() {
       {appStage === 'auth' && (
         <AuthScreen registeredUser={registeredUser} onAuthenticated={authenticate} />
       )}
+      {appStage === 'appearance' && (
+        <AppearanceScreen
+          currentMode={themeSelected ? mode : null}
+          onChoose={chooseAppearance}
+          onBack={themeSelected ? () => setAppStage('dashboard') : undefined}
+        />
+      )}
       {appStage === 'welcome' && currentUser && (
         <WelcomeBack user={currentUser} onDone={() => setAppStage('dashboard')} />
       )}
       {appStage === 'intro' && (
         <Animated.View style={[styles.launch, { opacity: launchOpacity }]}>
           <Animated.View style={[styles.launchInner, { transform: [{ scale: launchScale }] }]}>
-            <Image
-              accessibilityLabel="SubTracker logo"
-              resizeMode="contain"
-              source={require('./assets/subtrack-logo.png')}
-              style={styles.launchLogo}
-            />
+            <View style={[styles.launchLogoPanel, mode === 'dark' && { backgroundColor: lightColors.cream }]}>
+              <Image
+                accessibilityLabel="SubTracker logo"
+                resizeMode="contain"
+                source={require('./assets/subtrack-logo.png')}
+                style={styles.launchLogo}
+              />
+            </View>
             <Text style={styles.launchCaption}>Keep every renewal in sight.</Text>
           </Animated.View>
         </Animated.View>
@@ -436,7 +490,109 @@ function SubTrackApp() {
   );
 }
 
+function AppearanceScreen({ currentMode, onChoose, onBack }: {
+  currentMode: ThemeMode | null;
+  onChoose: (mode: ThemeMode) => Promise<void>;
+  onBack?: () => void;
+}) {
+  const { colors, styles } = useAppStyles();
+  const { height } = useWindowDimensions();
+  const slide = useRef(new Animated.Value(0)).current;
+  const [transitionMode, setTransitionMode] = useState<ThemeMode | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const select = (choice: ThemeMode) => {
+    if (transitionMode) return;
+    setError(null);
+    setTransitionMode(choice);
+    slide.setValue(choice === 'dark' ? height : -height);
+    Animated.timing(slide, {
+      toValue: 0,
+      duration: 650,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      void onChoose(choice).catch(() => {
+        setError('Could not save your choice. Please try again.');
+        setTransitionMode(null);
+      });
+    });
+  };
+
+  return (
+    <SafeAreaView style={styles.appearanceScreen} edges={['top', 'bottom', 'left', 'right']}>
+      <View style={styles.appearanceContent}>
+        {onBack && (
+          <PressableScale style={styles.appearanceBack} onPress={onBack} accessibilityLabel="Back to dashboard">
+            <MaterialCommunityIcons name="arrow-left" size={23} color={colors.ink} />
+          </PressableScale>
+        )}
+        <View style={styles.appearanceIntro}>
+          <View style={styles.appearanceBadge}>
+            <MaterialCommunityIcons name="palette-outline" size={29} color={colors.rose} />
+          </View>
+          <Text style={styles.appearanceEyebrow}>MAKE IT YOURS</Text>
+          <Text style={styles.appearanceTitle}>Choose your appearance</Text>
+          <Text style={styles.appearanceCaption}>Pick the look you prefer. You can change it later from your account menu.</Text>
+        </View>
+        <View style={styles.appearanceChoices}>
+          {(['light', 'dark'] as const).map((choice) => {
+            const preview = choice === 'light' ? lightColors : darkColors;
+            const selected = currentMode === choice;
+            return (
+              <PressableScale
+                key={choice}
+                style={[styles.appearanceChoice, selected && styles.appearanceChoiceSelected]}
+                onPress={() => select(choice)}
+                disabled={transitionMode !== null}
+                accessibilityLabel={`${choice === 'light' ? 'Light' : 'Dark'} mode${selected ? ', selected' : ''}`}
+              >
+                <View style={[styles.appearancePreview, { backgroundColor: preview.cream, borderColor: preview.line }]}>
+                  <View style={[styles.appearancePreviewHeader, { backgroundColor: preview.hero }]} />
+                  <View style={styles.appearancePreviewRow}>
+                    <View style={[styles.appearancePreviewTile, { backgroundColor: preview.menu, borderColor: preview.line }]} />
+                    <View style={[styles.appearancePreviewTile, { backgroundColor: preview.menu, borderColor: preview.line }]} />
+                  </View>
+                </View>
+                <View style={styles.appearanceChoiceCopy}>
+                  <MaterialCommunityIcons name={choice === 'light' ? 'white-balance-sunny' : 'weather-night'} size={23} color={colors.rose} />
+                  <Text style={styles.appearanceChoiceLabel}>{choice === 'light' ? 'Light mode' : 'Dark mode'}</Text>
+                  {selected && <MaterialCommunityIcons name="check-circle" size={21} color={colors.rose} />}
+                </View>
+              </PressableScale>
+            );
+          })}
+        </View>
+        {error && <Text style={styles.appearanceError} accessibilityRole="alert">{error}</Text>}
+      </View>
+      {transitionMode && (
+        <Animated.View
+          pointerEvents="auto"
+          style={[
+            styles.appearanceOverlay,
+            {
+              backgroundColor: transitionMode === 'dark' ? darkColors.cream : lightColors.cream,
+              transform: [{ translateY: slide }],
+            },
+          ]}
+        >
+          <MaterialCommunityIcons
+            name={transitionMode === 'dark' ? 'weather-night' : 'white-balance-sunny'}
+            size={54}
+            color={transitionMode === 'dark' ? darkColors.rose : lightColors.rose}
+          />
+          <Text style={[styles.appearanceOverlayText, { color: transitionMode === 'dark' ? darkColors.ink : lightColors.ink }]}>
+            {transitionMode === 'dark' ? 'Dark mode' : 'Light mode'}
+          </Text>
+        </Animated.View>
+      )}
+    </SafeAreaView>
+  );
+}
+
 function Onboarding({ onComplete }: { onComplete: () => Promise<void> }) {
+  const { colors, styles } = useAppStyles();
+  const onboardingSlides = useMemo(() => makeOnboardingSlides(colors), [colors]);
   const { width, height } = useWindowDimensions();
   const scrollRef = useRef<ScrollView>(null);
   const [activeSlide, setActiveSlide] = useState(0);
@@ -499,10 +655,10 @@ function Onboarding({ onComplete }: { onComplete: () => Promise<void> }) {
           onPress={advance}
           accessibilityLabel={lastSlide ? 'Get started with SubTrack' : `Continue to slide ${activeSlide + 2}`}
         >
-          <LinearGradient colors={[colors.rose, colors.peach]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.onboardingButtonGradient}>
+          <View style={[styles.onboardingButtonGradient, { backgroundColor: colors.button }]}>
             <Text style={styles.onboardingButtonText}>{lastSlide ? 'Get Started' : 'Next'}</Text>
-            <MaterialCommunityIcons name={lastSlide ? 'check' : 'arrow-right'} size={21} color={colors.white} />
-          </LinearGradient>
+            <MaterialCommunityIcons name={lastSlide ? 'check' : 'arrow-right'} size={21} color={colors.buttonText} />
+          </View>
         </PressableScale>
       </View>
     </SafeAreaView>
@@ -520,7 +676,8 @@ function OnboardingSlide({
   compact,
   circleSize,
   position,
-}: (typeof onboardingSlides)[number] & { active: boolean; width: number; compact: boolean; circleSize: number; position: number }) {
+}: ReturnType<typeof makeOnboardingSlides>[number] & { active: boolean; width: number; compact: boolean; circleSize: number; position: number }) {
+  const { colors, styles } = useAppStyles();
   const reveal = useRef(new Animated.Value(active ? 1 : 0.84)).current;
 
   useEffect(() => {
@@ -559,7 +716,7 @@ function OnboardingSlide({
             },
           ]}
         />
-        <MaterialCommunityIcons name={icon} size={compact ? 62 : 76} color={colors.white} />
+        <MaterialCommunityIcons name={icon} size={compact ? 62 : 76} color={colors.buttonText} />
       </Animated.View>
       <Text style={[styles.slideTitle, compact && styles.slideTitleCompact]}>{title}</Text>
       <Text style={[styles.slideCaption, compact && styles.slideCaptionCompact]}>{caption}</Text>
@@ -568,6 +725,7 @@ function OnboardingSlide({
 }
 
 function WelcomeBack({ user, onDone }: { user: AuthUser; onDone: () => void }) {
+  const { colors, styles } = useAppStyles();
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.9)).current;
 
@@ -589,7 +747,7 @@ function WelcomeBack({ user, onDone }: { user: AuthUser; onDone: () => void }) {
     <SafeAreaView style={styles.welcomeBack} edges={['top', 'bottom', 'left', 'right']}>
       <Animated.View style={[styles.welcomeBackInner, { opacity, transform: [{ scale }] }] }>
         <View style={styles.welcomeAvatar}>
-          <MaterialCommunityIcons name="account-check-outline" size={49} color={colors.white} />
+          <MaterialCommunityIcons name="account-check-outline" size={49} color={colors.buttonText} />
         </View>
         <Text style={styles.welcomeEyebrow}>SIGNED IN SECURELY</Text>
         <Text style={styles.welcomeTitle}>Welcome back, {user.displayName.split(' ')[0]}</Text>
@@ -600,6 +758,8 @@ function WelcomeBack({ user, onDone }: { user: AuthUser; onDone: () => void }) {
 }
 
 function Overview({ items, loaded, user, onNavigate, onAddSubscription, onAddTrial, onAccountPress }: { items: Subscription[]; loaded: boolean; user: AuthUser | null; onNavigate: (screen: ScreenName) => void; onAddSubscription: () => void; onAddTrial: () => void; onAccountPress: () => void }) {
+  const { colors, styles } = useAppStyles();
+  const menuItems = useMemo(() => makeMenuItems(colors), [colors]);
   const monthly = totalMonthly(items);
   const next = items.find((item) => daysUntil(item.nextBillingDate) >= 0) ?? items[0];
   const trialCount = items.filter((item) => item.isTrial).length;
@@ -615,7 +775,7 @@ function Overview({ items, loaded, user, onNavigate, onAddSubscription, onAddTri
           <MaterialCommunityIcons name="account-circle-outline" size={27} color={colors.rose} />
         </PressableScale>
       </View>
-      <LinearGradient colors={[colors.rose, '#D99D9E', colors.peach]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
+      <View style={styles.hero}>
         <View style={styles.heroGlow} />
         <Text style={styles.heroLabel}>ESTIMATED MONTHLY SPEND</Text>
         <Text style={styles.heroAmount}>{peso.format(monthly)}</Text>
@@ -630,7 +790,7 @@ function Overview({ items, loaded, user, onNavigate, onAddSubscription, onAddTri
             <Text style={styles.heroMetaValue}>{items.length} {trialCount ? `· ${trialCount} trial` : ''}</Text>
           </View>
         </View>
-      </LinearGradient>
+      </View>
       <View style={styles.sectionHeadingRow}>
         <Text style={styles.sectionTitle}>Explore</Text>
         <Text style={styles.sectionCaption}>Everything you need, right here</Text>
@@ -653,7 +813,7 @@ function Overview({ items, loaded, user, onNavigate, onAddSubscription, onAddTri
             }}
             accessibilityLabel={`${item.title}. ${item.caption}`}
           >
-            <MaterialCommunityIcons name={item.icon} size={31} color={colors.ink} style={styles.menuIcon} />
+            <MaterialCommunityIcons name={item.icon} size={31} color={colors.rose} style={styles.menuIcon} />
             <Text style={styles.menuTitle} numberOfLines={2} maxFontSizeMultiplier={1.05}>{item.title}</Text>
             <Text style={styles.menuCaption} numberOfLines={1} maxFontSizeMultiplier={1.05}>{item.caption}</Text>
           </PressableScale>
@@ -662,7 +822,7 @@ function Overview({ items, loaded, user, onNavigate, onAddSubscription, onAddTri
       {loaded && (
         <View style={styles.nextCard}>
           <View style={styles.nextIcon}>
-            <MaterialCommunityIcons name={next ? (next.icon as never) : 'calendar-heart'} size={24} color={next?.color ?? colors.slate} />
+            <MaterialCommunityIcons name={next ? (next.icon as never) : 'calendar-heart'} size={24} color={colors.rose} />
           </View>
           <View style={styles.flexOne}>
             <Text style={styles.nextLabel}>NEXT CHARGE</Text>
@@ -687,6 +847,7 @@ function Overview({ items, loaded, user, onNavigate, onAddSubscription, onAddTri
 }
 
 function ScreenHeader({ title, subtitle, onBack }: { title: string; subtitle?: string; onBack: () => void }) {
+  const { colors, styles } = useAppStyles();
   return (
     <View style={styles.screenHeader}>
       <PressableScale style={styles.backButton} onPress={onBack} accessibilityLabel="Go back">
@@ -702,6 +863,7 @@ function ScreenHeader({ title, subtitle, onBack }: { title: string; subtitle?: s
 }
 
 function SubscriptionsScreen({ items, onBack, onAdd, onEdit, onDelete }: { items: Subscription[]; onBack: () => void; onAdd: () => void; onEdit: (item: Subscription) => void; onDelete: (item: Subscription) => void }) {
+  const { colors, styles } = useAppStyles();
   const [query, setQuery] = useState('');
   const filtered = items.filter((item) => `${item.name} ${item.category}`.toLowerCase().includes(query.toLowerCase()));
   return (
@@ -710,7 +872,7 @@ function SubscriptionsScreen({ items, onBack, onAdd, onEdit, onDelete }: { items
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
         <View style={styles.searchBox}>
           <MaterialCommunityIcons name="magnify" size={22} color={colors.muted} />
-          <TextInput value={query} onChangeText={setQuery} placeholder="Search subscriptions" placeholderTextColor="#9B9CA3" style={styles.searchInput} returnKeyType="search" />
+          <TextInput value={query} onChangeText={setQuery} placeholder="Search subscriptions" placeholderTextColor={colors.muted} style={styles.searchInput} returnKeyType="search" />
           {query.length > 0 && (
             <PressableScale onPress={() => setQuery('')} haptic={false}>
               <MaterialCommunityIcons name="close-circle" size={20} color={colors.slate} />
@@ -729,10 +891,11 @@ function SubscriptionsScreen({ items, onBack, onAdd, onEdit, onDelete }: { items
 }
 
 function SubscriptionCard({ item, onEdit, onDelete }: { item: Subscription; onEdit: () => void; onDelete: () => void }) {
+  const { colors, styles } = useAppStyles();
   return (
     <View style={styles.subscriptionCard}>
-      <View style={[styles.subscriptionIcon, { backgroundColor: `${item.color}26` }]}>
-        <MaterialCommunityIcons name={item.icon as never} size={25} color={item.color} />
+      <View style={[styles.subscriptionIcon, { backgroundColor: `${colors.rose}20` }]}>
+        <MaterialCommunityIcons name={item.icon as never} size={25} color={colors.rose} />
       </View>
       <View style={styles.flexOne}>
         <View style={styles.nameRow}>
@@ -758,6 +921,7 @@ function SubscriptionCard({ item, onEdit, onDelete }: { item: Subscription; onEd
 }
 
 function CalendarScreen({ items, onBack }: { items: Subscription[]; onBack: () => void }) {
+  const { colors, styles } = useAppStyles();
   const groups = useMemo(() => {
     const result = new Map<string, Subscription[]>();
     items.forEach((item) => {
@@ -798,6 +962,8 @@ function CalendarScreen({ items, onBack }: { items: Subscription[]; onBack: () =
 }
 
 function AnalyticsScreen({ items, onBack }: { items: Subscription[]; onBack: () => void }) {
+  const { colors, styles } = useAppStyles();
+  const categoryMeta = getCategoryMeta(colors);
   const monthly = totalMonthly(items);
   const categoryStats = categories.map((category) => ({
     category,
@@ -844,6 +1010,8 @@ function AnalyticsScreen({ items, onBack }: { items: Subscription[]; onBack: () 
 }
 
 function CategoriesScreen({ items, onBack }: { items: Subscription[]; onBack: () => void }) {
+  const { colors, styles } = useAppStyles();
+  const categoryMeta = getCategoryMeta(colors);
   return (
     <View style={styles.fullScreen}>
       <ScreenHeader title="Categories" subtitle="A tidy view of recurring spending" onBack={onBack} />
@@ -870,6 +1038,7 @@ function CategoriesScreen({ items, onBack }: { items: Subscription[]; onBack: ()
 }
 
 function TrialsScreen({ items, onBack, onAdd, onEdit }: { items: Subscription[]; onBack: () => void; onAdd: () => void; onEdit: (item: Subscription) => void }) {
+  const { colors, styles } = useAppStyles();
   const trials = items.filter((item) => item.isTrial).sort((a, b) => (a.trialEndDate ?? a.nextBillingDate).localeCompare(b.trialEndDate ?? b.nextBillingDate));
   return (
     <View style={styles.fullScreen}>
@@ -880,7 +1049,7 @@ function TrialsScreen({ items, onBack, onAdd, onEdit }: { items: Subscription[];
           const endDate = item.trialEndDate ?? item.nextBillingDate;
           return (
             <PressableScale key={item.id} style={styles.trialCard} onPress={() => onEdit(item)} accessibilityLabel={`Edit ${item.name} trial`}>
-              <View style={[styles.trialIcon, { backgroundColor: `${item.color}25` }]}><MaterialCommunityIcons name="timer-outline" size={27} color={item.color} /></View>
+              <View style={[styles.trialIcon, { backgroundColor: `${colors.rose}20` }]}><MaterialCommunityIcons name="timer-outline" size={27} color={colors.rose} /></View>
               <View style={styles.flexOne}>
                 <Text style={styles.subscriptionName}>{item.name}</Text>
                 <Text style={styles.subscriptionMeta}>Trial ends {formatShortDate(endDate)}</Text>
@@ -903,6 +1072,8 @@ function TrialsScreen({ items, onBack, onAdd, onEdit }: { items: Subscription[];
 }
 
 function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: Subscription | null; startAsTrial: boolean; onBack: () => void; onSave: (draft: SubscriptionDraft) => Promise<void> }) {
+  const { colors, styles } = useAppStyles();
+  const categoryMeta = getCategoryMeta(colors);
   const defaultDate = useMemo(() => {
     return toLocalISODate(addBillingCycleDate(new Date(), 'monthly'));
   }, []);
@@ -983,11 +1154,11 @@ function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flexOne}>
         <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.formContent}>
           <FieldLabel icon="text-short" label="Subscription name" />
-          <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="e.g. Netflix" placeholderTextColor="#A2A1A0" autoCapitalize="words" returnKeyType="next" />
+          <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="e.g. Netflix" placeholderTextColor={colors.muted} autoCapitalize="words" returnKeyType="next" />
           <FieldLabel icon="cash" label="Price in Philippine peso" />
           <View style={styles.amountInputWrap}>
             <Text style={styles.pesoPrefix}>₱</Text>
-            <TextInput style={styles.amountInput} value={price} onChangeText={setPrice} placeholder="0.00" placeholderTextColor="#A2A1A0" keyboardType="decimal-pad" />
+            <TextInput style={styles.amountInput} value={price} onChangeText={setPrice} placeholder="0.00" placeholderTextColor={colors.muted} keyboardType="decimal-pad" />
           </View>
           <FieldLabel icon="shape-outline" label="Category" />
           <View style={styles.chipWrap}>
@@ -999,7 +1170,7 @@ function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: 
           </View>
           <FieldLabel icon="calendar-outline" label="Next billing date" />
           <View style={styles.dateInputWrap}>
-            <TextInput style={styles.dateTextInput} value={billingDate} onChangeText={setBillingDate} placeholder={todayISO()} placeholderTextColor="#A2A1A0" keyboardType="numbers-and-punctuation" maxLength={10} />
+            <TextInput style={styles.dateTextInput} value={billingDate} onChangeText={setBillingDate} placeholder={todayISO()} placeholderTextColor={colors.muted} keyboardType="numbers-and-punctuation" maxLength={10} />
             <PressableScale style={styles.calendarButton} onPress={() => setShowBillingPicker(true)} accessibilityLabel="Choose next billing date from calendar">
               <MaterialCommunityIcons name="calendar-month-outline" size={23} color={colors.rose} />
             </PressableScale>
@@ -1020,7 +1191,7 @@ function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: 
               <View style={styles.inlineCenter}><MaterialCommunityIcons name="timer-sand" size={21} color={colors.rose} /><Text style={styles.toggleTitle}>This is a free trial</Text></View>
               <Text style={styles.toggleCaption}>Track the last free day before billing starts.</Text>
             </View>
-            <Switch value={isTrial} onValueChange={toggleTrial} trackColor={{ false: '#D7D2CB', true: colors.peach }} thumbColor={isTrial ? colors.rose : '#F8F5EF'} />
+            <Switch value={isTrial} onValueChange={toggleTrial} trackColor={{ false: colors.line, true: colors.button }} thumbColor={colors.buttonText} />
           </View>
           {isTrial && (
             <>
@@ -1047,7 +1218,7 @@ function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: 
                     setSelectedTrialDays(null);
                   }}
                   placeholder={todayISO()}
-                  placeholderTextColor="#A2A1A0"
+                  placeholderTextColor={colors.muted}
                   keyboardType="numbers-and-punctuation"
                   maxLength={10}
                 />
@@ -1073,7 +1244,7 @@ function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: 
               <View style={styles.inlineCenter}><MaterialCommunityIcons name="bell-outline" size={21} color={colors.slate} /><Text style={styles.toggleTitle}>Renewal reminder</Text></View>
               <Text style={styles.toggleCaption}>A local notification, even when SubTrack is closed.</Text>
             </View>
-            <Switch value={notificationsEnabled} onValueChange={setNotificationsEnabled} trackColor={{ false: '#D7D2CB', true: colors.apricot }} thumbColor={notificationsEnabled ? colors.slate : '#F8F5EF'} />
+            <Switch value={notificationsEnabled} onValueChange={setNotificationsEnabled} trackColor={{ false: colors.line, true: colors.button }} thumbColor={colors.buttonText} />
           </View>
           {notificationsEnabled && (
             <>
@@ -1084,7 +1255,7 @@ function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: 
             </>
           )}
           <PrimaryButton label={saving ? 'Saving…' : initial ? 'Save changes' : startAsTrial ? 'Track free trial' : 'Start tracking'} icon={saving ? 'timer-sand' : 'check'} onPress={() => void submit()} disabled={saving} />
-          <Text style={styles.formFooter}>No account required · Local database only</Text>
+          <Text style={styles.formFooter}>Saved on this device</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -1092,30 +1263,35 @@ function SubscriptionForm({ initial, startAsTrial, onBack, onSave }: { initial: 
 }
 
 function FieldLabel({ icon, label }: { icon: string; label: string }) {
+  const { colors, styles } = useAppStyles();
   return <View style={styles.fieldLabelRow}><MaterialCommunityIcons name={icon as never} size={18} color={colors.slate} /><Text style={styles.fieldLabel}>{label}</Text></View>;
 }
 
-function ChoiceChip({ selected, label, icon, color = colors.rose, onPress }: { selected: boolean; label: string; icon?: string; color?: string; onPress: () => void }) {
+function ChoiceChip({ selected, label, icon, color, onPress }: { selected: boolean; label: string; icon?: string; color?: string; onPress: () => void }) {
+  const { colors, styles } = useAppStyles();
+  const tint = color ?? colors.rose;
   return (
-    <PressableScale style={[styles.choiceChip, selected && { borderColor: color, backgroundColor: `${color}1F` }]} onPress={onPress} accessibilityLabel={`${label}${selected ? ', selected' : ''}`}>
-      {icon && <MaterialCommunityIcons name={icon as never} size={17} color={selected ? color : colors.muted} />}
+    <PressableScale style={[styles.choiceChip, selected && { borderColor: tint, backgroundColor: `${tint}1F` }]} onPress={onPress} accessibilityLabel={`${label}${selected ? ', selected' : ''}`}>
+      {icon && <MaterialCommunityIcons name={icon as never} size={17} color={selected ? tint : colors.muted} />}
       <Text style={[styles.choiceChipText, selected && { color: colors.ink }]}>{label}</Text>
     </PressableScale>
   );
 }
 
 function PrimaryButton({ label, icon, onPress, disabled = false }: { label: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; onPress: () => void; disabled?: boolean }) {
+  const { colors, styles } = useAppStyles();
   return (
     <PressableScale style={styles.primaryButton} onPress={onPress} disabled={disabled} accessibilityLabel={label}>
-      <LinearGradient colors={[colors.rose, '#D99B98']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryGradient}>
-        <MaterialCommunityIcons name={icon} size={21} color={colors.white} />
+      <View style={[styles.primaryGradient, { backgroundColor: colors.button }]}>
+        <MaterialCommunityIcons name={icon} size={21} color={colors.buttonText} />
         <Text style={styles.primaryButtonText}>{label}</Text>
-      </LinearGradient>
+      </View>
     </PressableScale>
   );
 }
 
 function EmptyState({ icon, title, caption }: { icon: keyof typeof MaterialCommunityIcons.glyphMap; title: string; caption: string }) {
+  const { colors, styles } = useAppStyles();
   return (
     <View style={styles.emptyState}>
       <View style={styles.emptyIcon}><MaterialCommunityIcons name={icon} size={38} color={colors.rose} /></View>
@@ -1125,92 +1301,94 @@ function EmptyState({ icon, title, caption }: { icon: keyof typeof MaterialCommu
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors, shadows: ReturnType<typeof getShadows>) {
+  return StyleSheet.create({
   app: { flex: 1, backgroundColor: colors.cream }, safeArea: { flex: 1 }, screen: { flex: 1 },
   fullScreen: { flex: 1, width: '100%', maxWidth: 620, alignSelf: 'center' }, flexOne: { flex: 1 },
-  blob: { position: 'absolute', borderRadius: 999, opacity: 0.35 },
-  blobTop: { width: 260, height: 260, backgroundColor: colors.peach, top: -125, right: -95 },
-  blobBottom: { width: 230, height: 230, backgroundColor: colors.slate, bottom: -135, left: -110, opacity: 0.15 },
+  blob: { position: 'absolute', borderRadius: 999, opacity: 0.17 },
+  blobTop: { width: 260, height: 260, backgroundColor: colors.line, top: -125, right: -95 },
+  blobBottom: { width: 230, height: 230, backgroundColor: colors.line, bottom: -135, left: -110, opacity: 0.12 },
   overviewContent: { width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 18, paddingBottom: 36 },
   brandRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 },
   brandCopy: { flex: 1, paddingRight: 14 },
   eyebrow: { color: colors.muted, fontSize: 13, fontWeight: '600', letterSpacing: 0.2 },
   title: { color: colors.ink, fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -0.8 },
-  brandIcon: { width: 48, height: 48, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.white}C9`, borderWidth: 1, borderColor: `${colors.white}E0` },
-  hero: { borderRadius: 28, padding: 24, overflow: 'hidden', ...shadows.card },
+  brandIcon: { width: 48, height: 48, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
+  hero: { borderRadius: 28, padding: 24, overflow: 'hidden', backgroundColor: colors.hero, ...shadows.card },
   heroGlow: { position: 'absolute', width: 160, height: 160, borderRadius: 80, right: -45, top: -55, backgroundColor: '#FFFFFF25' },
-  heroLabel: { color: '#FFF9F3CC', fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
-  heroAmount: { color: colors.white, fontSize: 37, lineHeight: 47, fontWeight: '800', letterSpacing: -1.1, marginTop: 3 },
+  heroLabel: { color: colors.heroMuted, fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
+  heroAmount: { color: colors.heroText, fontSize: 37, lineHeight: 47, fontWeight: '800', letterSpacing: -1.1, marginTop: 3 },
   heroMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 18 },
-  heroMetaLabel: { color: '#FFF9F3B8', fontSize: 11, marginBottom: 3 }, heroMetaValue: { color: colors.white, fontSize: 14, fontWeight: '700' },
+  heroMetaLabel: { color: colors.heroMuted, fontSize: 11, marginBottom: 3 }, heroMetaValue: { color: colors.heroText, fontSize: 14, fontWeight: '700' },
   heroDivider: { width: 1, height: 34, backgroundColor: '#FFFFFF50', marginHorizontal: 22 },
   sectionHeadingRow: { marginTop: 28, marginBottom: 14 }, sectionTitle: { fontSize: 21, fontWeight: '800', color: colors.ink, letterSpacing: -0.3 },
   sectionCaption: { color: colors.muted, fontSize: 13, marginTop: 2 },
   menuGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 10 },
-  menuCard: { width: '48%', maxWidth: 190, aspectRatio: 1, borderRadius: 23, ...shadows.card },
+  menuCard: { width: '48%', maxWidth: 190, aspectRatio: 1, borderRadius: 23, borderWidth: 1, borderColor: colors.line, ...shadows.card },
   menuCardContent: { flex: 1, padding: 12, alignItems: 'flex-start', justifyContent: 'flex-start' },
   menuIcon: { alignSelf: 'flex-start', marginBottom: 10 },
-  menuTitle: { color: colors.ink, fontSize: 18, lineHeight: 22, fontWeight: '900', letterSpacing: -0.3 }, menuCaption: { color: '#474C59', fontSize: 13, lineHeight: 17, marginTop: 3, fontWeight: '500' },
-  nextCard: { flexDirection: 'row', alignItems: 'center', marginTop: 18, padding: 17, borderRadius: 21, backgroundColor: `${colors.surface}E6`, borderWidth: 1, borderColor: '#FFFFFFD5' },
+  menuTitle: { color: colors.ink, fontSize: 18, lineHeight: 22, fontWeight: '900', letterSpacing: -0.3 }, menuCaption: { color: colors.muted, fontSize: 13, lineHeight: 17, marginTop: 3, fontWeight: '500' },
+  nextCard: { flexDirection: 'row', alignItems: 'center', marginTop: 18, padding: 17, borderRadius: 21, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
   nextIcon: { width: 45, height: 45, borderRadius: 15, backgroundColor: `${colors.slate}1C`, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   nextLabel: { color: colors.rose, fontSize: 9.5, letterSpacing: 1, fontWeight: '800' }, nextTitle: { color: colors.ink, fontSize: 15, fontWeight: '800', marginTop: 2 },
   nextCaption: { color: colors.muted, fontSize: 11.5, marginTop: 2 }, nextAmount: { color: colors.ink, fontSize: 14, fontWeight: '800', marginLeft: 8 },
   localNote: { alignSelf: 'center', color: colors.muted, fontSize: 11.5, marginTop: 18 },
   screenHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16 },
-  backButton: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.surface}DE`, borderWidth: 1, borderColor: colors.white },
+  backButton: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
   headerTextWrap: { flex: 1, alignItems: 'center', paddingHorizontal: 10 }, screenTitle: { color: colors.ink, fontSize: 20, fontWeight: '800', letterSpacing: -0.35, textAlign: 'center' },
   screenSubtitle: { color: colors.muted, fontSize: 11.5, marginTop: 2, textAlign: 'center' }, headerSpacer: { width: 44 }, listContent: { paddingHorizontal: 20, paddingBottom: 42 },
-  searchBox: { height: 52, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, backgroundColor: colors.surface, borderRadius: 18, borderWidth: 1, borderColor: colors.white, marginBottom: 13 },
+  searchBox: { height: 52, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, backgroundColor: colors.surface, borderRadius: 18, borderWidth: 1, borderColor: colors.line, marginBottom: 13 },
   searchInput: { flex: 1, height: '100%', color: colors.ink, fontSize: 15, paddingHorizontal: 10 },
   primaryButton: { borderRadius: 18, overflow: 'hidden', marginVertical: 8, ...shadows.card }, primaryGradient: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 20 },
-  primaryButtonText: { color: colors.white, fontWeight: '800', fontSize: 15 },
-  subscriptionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: `${colors.surface}F2`, borderRadius: 22, padding: 15, marginTop: 12, borderWidth: 1, borderColor: colors.white, ...shadows.card },
+  primaryButtonText: { color: colors.buttonText, fontWeight: '800', fontSize: 15 },
+  subscriptionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 22, padding: 15, marginTop: 12, borderWidth: 1, borderColor: colors.line, ...shadows.card },
   subscriptionIcon: { width: 50, height: 50, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   subscriptionName: { color: colors.ink, fontSize: 15.5, fontWeight: '800', flexShrink: 1 }, trialPill: { color: colors.rose, fontSize: 8, fontWeight: '900', letterSpacing: 0.7, backgroundColor: `${colors.rose}1B`, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
   subscriptionMeta: { color: colors.muted, fontSize: 11.5, marginTop: 3 }, subscriptionDate: { color: colors.rose, fontSize: 10.5, fontWeight: '700', marginTop: 4 },
   priceActions: { alignItems: 'flex-end', marginLeft: 7 }, subscriptionPrice: { color: colors.ink, fontSize: 13.5, fontWeight: '800' }, actionRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
   miniAction: { width: 31, height: 31, borderRadius: 10, backgroundColor: `${colors.slate}12`, alignItems: 'center', justifyContent: 'center' },
-  emptyState: { alignItems: 'center', backgroundColor: `${colors.surface}D9`, borderRadius: 26, paddingHorizontal: 28, paddingVertical: 40, marginTop: 18, borderWidth: 1, borderColor: colors.white },
+  emptyState: { alignItems: 'center', backgroundColor: colors.card, borderRadius: 26, paddingHorizontal: 28, paddingVertical: 40, marginTop: 18, borderWidth: 1, borderColor: colors.line },
   emptyIcon: { width: 76, height: 76, borderRadius: 26, backgroundColor: `${colors.rose}1A`, alignItems: 'center', justifyContent: 'center', marginBottom: 17 },
   emptyTitle: { color: colors.ink, fontSize: 18, fontWeight: '800', textAlign: 'center' }, emptyCaption: { color: colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 7 },
-  calendarSection: { backgroundColor: `${colors.surface}E8`, borderRadius: 24, padding: 17, marginBottom: 14, borderWidth: 1, borderColor: colors.white }, calendarMonth: { color: colors.ink, fontSize: 16, fontWeight: '800', marginBottom: 13 },
+  calendarSection: { backgroundColor: colors.card, borderRadius: 24, padding: 17, marginBottom: 14, borderWidth: 1, borderColor: colors.line }, calendarMonth: { color: colors.ink, fontSize: 16, fontWeight: '800', marginBottom: 13 },
   calendarRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', position: 'relative' }, dateBadge: { width: 47, height: 53, borderRadius: 15, backgroundColor: `${colors.rose}1C`, alignItems: 'center', justifyContent: 'center', zIndex: 2 },
   dateBadgeMonth: { color: colors.rose, fontSize: 8.5, fontWeight: '900', letterSpacing: 0.5 }, dateBadgeDay: { color: colors.ink, fontSize: 19, fontWeight: '800', lineHeight: 22 },
   timeline: { position: 'absolute', width: 2, height: 23, left: 22.5, bottom: -1, backgroundColor: `${colors.rose}37` }, timelineLast: { display: 'none' },
   calendarDetails: { flex: 1, paddingHorizontal: 12 }, calendarPrice: { color: colors.ink, fontSize: 13, fontWeight: '800' },
-  analyticsSummary: { alignItems: 'center', padding: 25, borderRadius: 27, backgroundColor: `${colors.surface}EE`, borderWidth: 1, borderColor: colors.white, ...shadows.card },
+  analyticsSummary: { alignItems: 'center', padding: 25, borderRadius: 27, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, ...shadows.card },
   analyticsIcon: { width: 58, height: 58, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.rose}19`, marginBottom: 13 },
   analyticsLabel: { color: colors.muted, fontSize: 10, fontWeight: '800', letterSpacing: 1 }, analyticsAmount: { color: colors.ink, fontSize: 33, fontWeight: '800', letterSpacing: -0.8, marginTop: 5 },
   analyticsCaption: { color: colors.rose, fontSize: 12, fontWeight: '700', marginTop: 5 }, blockTitle: { color: colors.ink, fontSize: 17, fontWeight: '800', marginTop: 24, marginBottom: 11 },
-  chartCard: { backgroundColor: `${colors.surface}EA`, borderRadius: 24, padding: 18, borderWidth: 1, borderColor: colors.white }, barGroup: { marginBottom: 17 },
+  chartCard: { backgroundColor: colors.card, borderRadius: 24, padding: 18, borderWidth: 1, borderColor: colors.line }, barGroup: { marginBottom: 17 },
   barLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }, inlineCenter: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  barLabel: { color: colors.ink, fontSize: 13, fontWeight: '700' }, barValue: { color: colors.muted, fontSize: 12, fontWeight: '700' }, barTrack: { height: 8, borderRadius: 6, backgroundColor: '#ECE6DE', overflow: 'hidden' },
+  barLabel: { color: colors.ink, fontSize: 13, fontWeight: '700' }, barValue: { color: colors.muted, fontSize: 12, fontWeight: '700' }, barTrack: { height: 8, borderRadius: 6, backgroundColor: colors.line, overflow: 'hidden' },
   barFill: { height: '100%', borderRadius: 6 }, emptyInline: { color: colors.muted, textAlign: 'center', paddingVertical: 18 }, insightCard: { flexDirection: 'row', gap: 13, backgroundColor: `${colors.apricot}36`, borderRadius: 21, padding: 17, marginTop: 14 },
   insightTitle: { color: colors.ink, fontSize: 14, fontWeight: '800' }, insightText: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 3 },
-  categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 }, categoryCard: { width: '48.3%', minHeight: 160, padding: 16, borderRadius: 22, backgroundColor: `${colors.surface}ED`, borderWidth: 1, borderColor: colors.white, ...shadows.card },
+  categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 }, categoryCard: { width: '48.3%', minHeight: 160, padding: 16, borderRadius: 22, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, ...shadows.card },
   categoryIcon: { width: 47, height: 47, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 12 }, categoryTitle: { color: colors.ink, fontSize: 14.5, fontWeight: '800' },
   categoryCount: { color: colors.muted, fontSize: 11, marginTop: 3 }, categoryAmount: { color: colors.rose, fontSize: 12, fontWeight: '800', marginTop: 10 },
-  trialCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: `${colors.surface}EE`, borderRadius: 22, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: colors.white, ...shadows.card },
+  trialCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 22, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: colors.line, ...shadows.card },
   trialIcon: { width: 50, height: 50, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, trialDue: { color: colors.rose, fontSize: 11, fontWeight: '800', marginTop: 5 },
   trialPriceWrap: { alignItems: 'flex-end', marginLeft: 8 }, afterTrial: { color: colors.muted, fontSize: 9.5, marginTop: 3 }, formContent: { paddingHorizontal: 20, paddingBottom: 48 },
   fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 18, marginBottom: 8 }, fieldLabel: { color: colors.ink, fontSize: 13, fontWeight: '800' },
-  input: { height: 54, borderRadius: 17, paddingHorizontal: 16, backgroundColor: colors.surface, color: colors.ink, fontSize: 15, borderWidth: 1, borderColor: colors.white },
-  amountInputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', borderRadius: 17, paddingHorizontal: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.white },
+  input: { height: 54, borderRadius: 17, paddingHorizontal: 16, backgroundColor: colors.surface, color: colors.ink, fontSize: 15, borderWidth: 1, borderColor: colors.line },
+  amountInputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', borderRadius: 17, paddingHorizontal: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
   pesoPrefix: { color: colors.rose, fontSize: 20, fontWeight: '800', marginRight: 8 }, amountInput: { flex: 1, height: '100%', color: colors.ink, fontSize: 17, fontWeight: '700' },
-  dateInputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', borderRadius: 17, paddingLeft: 16, paddingRight: 6, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.white },
+  dateInputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', borderRadius: 17, paddingLeft: 16, paddingRight: 6, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
   dateTextInput: { flex: 1, height: '100%', color: colors.ink, fontSize: 15 },
   calendarButton: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.rose}18` },
   helperText: { color: colors.muted, fontSize: 10.5, marginTop: 5, marginLeft: 3 }, chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   choiceChip: { minHeight: 39, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, borderRadius: 13, backgroundColor: `${colors.surface}C9`, borderWidth: 1, borderColor: colors.line },
-  choiceChipText: { color: colors.muted, fontSize: 11.5, fontWeight: '700' }, toggleCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: `${colors.surface}D9`, borderRadius: 19, padding: 15, marginTop: 20, borderWidth: 1, borderColor: colors.white },
+  choiceChipText: { color: colors.muted, fontSize: 11.5, fontWeight: '700' }, toggleCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 19, padding: 15, marginTop: 20, borderWidth: 1, borderColor: colors.line },
   toggleTextWrap: { flex: 1, paddingRight: 12 }, toggleTitle: { color: colors.ink, fontSize: 13.5, fontWeight: '800' }, toggleCaption: { color: colors.muted, fontSize: 10.5, lineHeight: 15, marginTop: 5 },
   formFooter: { color: colors.muted, fontSize: 10.5, textAlign: 'center', marginTop: 8 }, launch: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 100, backgroundColor: colors.cream, alignItems: 'center', justifyContent: 'center' },
   launchInner: { alignItems: 'center' },
+  launchLogoPanel: { borderRadius: 30, padding: 12 },
   launchLogo: { width: 264, height: 271 },
   launchCaption: { color: colors.muted, fontSize: 13, marginTop: 14 },
   welcomeBack: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
   welcomeBackInner: { width: '100%', maxWidth: 440, alignItems: 'center' },
-  welcomeAvatar: { width: 112, height: 112, borderRadius: 56, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.rose, marginBottom: 24, ...shadows.card },
+  welcomeAvatar: { width: 112, height: 112, borderRadius: 56, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.button, marginBottom: 24, ...shadows.card },
   welcomeEyebrow: { color: colors.rose, fontSize: 10.5, fontWeight: '900', letterSpacing: 1.5, textAlign: 'center' },
   welcomeTitle: { color: colors.ink, fontSize: 30, lineHeight: 36, fontWeight: '900', letterSpacing: -0.8, textAlign: 'center', marginTop: 8 },
   welcomeCaption: { color: colors.muted, fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 7 },
@@ -1235,5 +1413,26 @@ const styles = StyleSheet.create({
   onboardingButtonSlot: { width: '100%' },
   onboardingButton: { width: '100%', borderRadius: 19, overflow: 'hidden', ...shadows.card },
   onboardingButtonGradient: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 22 },
-  onboardingButtonText: { color: colors.white, fontSize: 16, fontWeight: '900' },
+  onboardingButtonText: { color: colors.buttonText, fontSize: 16, fontWeight: '900' },
+  appearanceScreen: { flex: 1, backgroundColor: colors.cream },
+  appearanceContent: { flex: 1, width: '100%', maxWidth: 520, alignSelf: 'center', justifyContent: 'center', paddingHorizontal: 22, paddingVertical: 20 },
+  appearanceBack: { position: 'absolute', top: 12, left: 22, width: 44, height: 44, borderRadius: 15, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', zIndex: 2 },
+  appearanceIntro: { alignItems: 'center', marginBottom: 24 },
+  appearanceBadge: { width: 64, height: 64, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface, marginBottom: 20 },
+  appearanceEyebrow: { color: colors.rose, fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
+  appearanceTitle: { color: colors.ink, fontSize: 29, lineHeight: 36, fontWeight: '900', letterSpacing: -0.6, textAlign: 'center', marginTop: 8 },
+  appearanceCaption: { color: colors.muted, fontSize: 14, lineHeight: 21, textAlign: 'center', marginTop: 9, maxWidth: 330 },
+  appearanceChoices: { flexDirection: 'row', gap: 12, justifyContent: 'center' },
+  appearanceChoice: { width: '48%', maxWidth: 215, minHeight: 186, borderRadius: 22, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, padding: 11, ...shadows.card },
+  appearanceChoiceSelected: { borderColor: colors.rose, borderWidth: 2 },
+  appearancePreview: { height: 112, borderRadius: 14, borderWidth: 1, padding: 12, overflow: 'hidden' },
+  appearancePreviewHeader: { height: 29, borderRadius: 8, marginBottom: 9 },
+  appearancePreviewRow: { flexDirection: 'row', gap: 7, flex: 1 },
+  appearancePreviewTile: { flex: 1, borderRadius: 7, borderWidth: 1 },
+  appearanceChoiceCopy: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 13 },
+  appearanceChoiceLabel: { color: colors.ink, fontSize: 13, fontWeight: '800', flex: 1 },
+  appearanceError: { color: colors.danger, fontSize: 13, textAlign: 'center', marginTop: 15 },
+  appearanceOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 10, alignItems: 'center', justifyContent: 'center' },
+  appearanceOverlayText: { fontSize: 25, fontWeight: '900', marginTop: 14 },
 });
+}

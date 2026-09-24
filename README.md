@@ -2,6 +2,10 @@
 
 SubTrack is a local-first subscription tracker built with React Native and Expo. It keeps recurring charges, free trials, renewal dates, category totals, and spending analytics in one centered dashboard.
 
+![Illustrative light and dark appearance preview](preview/appearance-preview.png)
+
+The preview illustrates the current layout and palette; it is not a device screenshot.
+
 ## Run the app
 
 ```powershell
@@ -17,6 +21,9 @@ Scan the QR code with Expo Go, or run `npm.cmd run android` with an Android emul
 - Registration-first local authentication with persistent secure sessions
 - Salted scrypt password verification, encrypted device storage, and sign-in cooldowns
 - Personalized welcome-back transition for returning signed-in users
+- Neutral light theme with a white background and a matching dark theme
+- Appearance choice after registration, saved on device and changeable from the account menu
+- Directional appearance transition: dark rises from below, light descends from above
 - Add, edit, search, and delete subscriptions
 - Weekly, monthly, quarterly, and yearly billing cycles
 - Philippine-peso summaries and annual projections

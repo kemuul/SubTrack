@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -9,7 +9,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -18,15 +17,17 @@ import {
   signInLocalAccount,
   type AuthUser,
 } from '../auth';
-import { colors, shadows } from '../theme';
+import { useTheme, type ThemeColors, getShadows } from '../theme';
 import { PressableScale } from './PressableScale';
 
 type Props = {
   registeredUser: AuthUser | null;
-  onAuthenticated: (user: AuthUser) => void;
+  onAuthenticated: (user: AuthUser, isRegistration: boolean) => void;
 };
 
 export function AuthScreen({ registeredUser, onAuthenticated }: Props) {
+  const { colors, shadows } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
   const isRegistration = registeredUser === null;
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState(registeredUser?.email ?? '');
@@ -48,7 +49,7 @@ export function AuthScreen({ registeredUser, onAuthenticated }: Props) {
         setError(result.message);
         return;
       }
-      onAuthenticated(result.user);
+      onAuthenticated(result.user, isRegistration);
     } catch {
       setError('Secure sign-in is unavailable right now. Please restart the app and try again.');
     } finally {
@@ -169,21 +170,16 @@ export function AuthScreen({ registeredUser, onAuthenticated }: Props) {
               onPress={() => void submit()}
               accessibilityLabel={isRegistration ? 'Create secure account' : 'Sign in securely'}
             >
-              <LinearGradient
-                colors={[colors.rose, colors.peach]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.buttonGradient}
-              >
+              <View style={styles.buttonGradient}>
                 {busy ? (
-                  <ActivityIndicator color={colors.white} />
+                  <ActivityIndicator color={colors.buttonText} />
                 ) : (
                   <>
                     <Text style={styles.buttonText}>{isRegistration ? 'Create Account' : 'Sign In'}</Text>
-                    <MaterialCommunityIcons name="arrow-right" size={21} color={colors.white} />
+                    <MaterialCommunityIcons name="arrow-right" size={21} color={colors.buttonText} />
                   </>
                 )}
-              </LinearGradient>
+              </View>
             </PressableScale>
           </View>
 
@@ -209,6 +205,8 @@ type AuthFieldProps = React.ComponentProps<typeof TextInput> & {
 };
 
 function AuthField({ label, icon, rightAction, ...inputProps }: AuthFieldProps) {
+  const { colors, shadows } = useTheme();
+  const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
   return (
     <View style={styles.fieldBlock}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -217,7 +215,7 @@ function AuthField({ label, icon, rightAction, ...inputProps }: AuthFieldProps) 
         <TextInput
           {...inputProps}
           style={styles.input}
-          placeholderTextColor="#999AA1"
+          placeholderTextColor={colors.muted}
           selectionColor={colors.rose}
           importantForAutofill="yes"
           returnKeyType={inputProps.onSubmitEditing ? 'done' : 'next'}
@@ -229,7 +227,8 @@ function AuthField({ label, icon, rightAction, ...inputProps }: AuthFieldProps) 
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors, shadows: ReturnType<typeof getShadows>) {
+  return StyleSheet.create({
   safeArea: { flex: 1 },
   flexOne: { flex: 1 },
   content: { flexGrow: 1, width: '100%', maxWidth: 520, alignSelf: 'center', justifyContent: 'center', paddingHorizontal: 22, paddingTop: 22, paddingBottom: 28 },
@@ -240,10 +239,10 @@ const styles = StyleSheet.create({
   eyebrow: { color: colors.rose, fontSize: 10.5, fontWeight: '900', letterSpacing: 1.2, textAlign: 'center' },
   title: { color: colors.ink, fontSize: 29, lineHeight: 35, fontWeight: '900', letterSpacing: -0.75, textAlign: 'center', marginTop: 7 },
   caption: { color: colors.muted, fontSize: 13.5, lineHeight: 20, textAlign: 'center', marginTop: 8, paddingHorizontal: 8 },
-  card: { backgroundColor: `${colors.surface}F5`, borderRadius: 25, borderWidth: 1, borderColor: colors.white, padding: 18, ...shadows.card },
+  card: { backgroundColor: colors.card, borderRadius: 25, borderWidth: 1, borderColor: colors.line, padding: 18, ...shadows.card },
   fieldBlock: { marginBottom: 14 },
   fieldLabel: { color: colors.ink, fontSize: 12.5, fontWeight: '800', marginBottom: 7, marginLeft: 2 },
-  inputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.white, borderRadius: 17, borderWidth: 1, borderColor: colors.line, paddingLeft: 15, paddingRight: 6 },
+  inputWrap: { height: 54, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.surface, borderRadius: 17, borderWidth: 1, borderColor: colors.line, paddingLeft: 15, paddingRight: 6 },
   input: { flex: 1, height: '100%', color: colors.ink, fontSize: 15, paddingVertical: 0 },
   eyeButton: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   passwordHint: { color: colors.muted, fontSize: 10.5, lineHeight: 15, marginTop: -7, marginBottom: 13, paddingHorizontal: 3 },
@@ -251,9 +250,10 @@ const styles = StyleSheet.create({
   errorText: { flex: 1, color: colors.danger, fontSize: 12, lineHeight: 17, fontWeight: '700' },
   buttonSlot: { width: '100%', marginTop: 4 },
   button: { width: '100%', borderRadius: 18, overflow: 'hidden', ...shadows.card },
-  buttonGradient: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 20 },
-  buttonText: { color: colors.white, fontSize: 15.5, fontWeight: '900' },
+  buttonGradient: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 20, backgroundColor: colors.button },
+  buttonText: { color: colors.buttonText, fontSize: 15.5, fontWeight: '900' },
   securityNote: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: `${colors.success}13`, borderRadius: 16, padding: 14, marginTop: 18 },
   securityText: { flex: 1, color: colors.muted, fontSize: 11.5, lineHeight: 17 },
   localOnlyNote: { color: colors.muted, fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 13, paddingHorizontal: 12 },
 });
+}

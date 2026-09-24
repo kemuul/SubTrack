@@ -2,10 +2,11 @@
   "expo": {
     "name": "SubTrack",
     "slug": "subtrack",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#FFFFFF",
     "ios": {
       "supportsTablet": true,
       "config": {
@@ -14,13 +15,13 @@
     },
     "android": {
       "package": "com.subtrack.app",
-      "versionCode": 6,
+      "versionCode": 7,
       "permissions": [
         "POST_NOTIFICATIONS",
         "SCHEDULE_EXACT_ALARM"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#F5E4C4",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -35,11 +36,12 @@
       [
         "expo-notifications",
         {
-          "color": "#C78997",
+          "color": "#315B7C",
           "defaultChannel": "renewal-reminders"
         }
       ],
       "@react-native-community/datetimepicker",
+      "expo-system-ui",
       [
         "expo-secure-store",
         {
@@ -59,6 +61,6 @@
       ]
     ],
     "description": "A private, local-first subscription and renewal tracker.",
-    "primaryColor": "#C78997"
+    "primaryColor": "#315B7C"
   }
 }
